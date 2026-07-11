@@ -5,11 +5,11 @@ controller_manager:
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    left_cartesian_impedance_controller:
-      type: openarm_cartesian_control/OpenArmCartesianController
+    left_impedance_controller:
+      type: openarm_impedance_control/OpenArmImpedanceController
 
-    right_cartesian_impedance_controller:
-      type: openarm_cartesian_control/OpenArmCartesianController
+    right_impedance_controller:
+      type: openarm_impedance_control/OpenArmImpedanceController
 
     left_gripper_controller:
       type: position_controllers/GripperActionController
@@ -18,7 +18,7 @@ controller_manager:
       type: position_controllers/GripperActionController
 
 
-left_cartesian_impedance_controller:
+left_impedance_controller:
   ros__parameters:
     joints:
       - openarm_left_joint1
@@ -29,15 +29,9 @@ left_cartesian_impedance_controller:
       - openarm_left_joint6
       - openarm_left_joint7
     ee_frame_name: openarm_left_hand_tcp
-    # Stiffness: [x, y, z, rx, ry, rz] — translational (N/m), rotational (Nm/rad)
-    k_gains: [200.0, 200.0, 200.0, 0.0, 0.0, 0.0]
-    # Damping: [x, y, z, rx, ry, rz]
-    d_gains: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    # Cartesian workspace limits (metres, relative to base frame)
-    cartesian_position_lower_limits: [-0.8, -0.8, 0.0]
-    cartesian_position_upper_limits: [0.8, 0.8, 1.2]
-    # Cartesian wrench clamp: [fx, fy, fz, tx, ty, tz] (N, Nm)
-    cartesian_torque_limits: [30.0, 30.0, 30.0, 5.0, 5.0, 5.0]
+    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
     # Per-joint torque clamp (Nm) — rated torques by motor:
     #   joints 1-2: DM-J8009P (~45 Nm rated)
     #   joint  3:   DM-J4340P (~25 Nm rated)
@@ -46,7 +40,7 @@ left_cartesian_impedance_controller:
     joint_torque_limits: [20.0, 20.0, 15.0, 10.0, 5.0, 5.0, 5.0]
 
 
-right_cartesian_impedance_controller:
+right_impedance_controller:
   ros__parameters:
     joints:
       - openarm_right_joint1
@@ -57,16 +51,15 @@ right_cartesian_impedance_controller:
       - openarm_right_joint6
       - openarm_right_joint7
     ee_frame_name: openarm_right_hand_tcp
-    # Stiffness: [x, y, z, rx, ry, rz]
-    k_gains: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    # Damping: [x, y, z, rx, ry, rz]
-    d_gains: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    # Cartesian workspace limits (metres, relative to base frame)
-    cartesian_position_lower_limits: [-0.8, -0.8, 0.0]
-    cartesian_position_upper_limits: [0.8, 0.8, 1.2]
-    # Cartesian wrench clamp: [fx, fy, fz, tx, ty, tz] (N, Nm)
-    cartesian_torque_limits: [30.0, 30.0, 30.0, 5.0, 5.0, 5.0]
+    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
+    
+    # Per-joint torque clamp (Nm) — rated torques by motor:
+    #   joints 1-2: DM-J8009P (~45 Nm rated)
+    #   joint  3:   DM-J4340P (~25 Nm rated)
+    #   joint  4:   DM-J4340  (~20 Nm rated)
+    #   joints 5-7: DM-J4310  (~10 Nm rated)
     joint_torque_limits: [20.0, 20.0, 15.0, 10.0, 5.0, 5.0, 5.0]
 
 
