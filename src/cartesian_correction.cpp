@@ -1,6 +1,5 @@
-#include "openarm_impedance_control/impedance.hpp"
+#include "openarm_impedance_control/cartesian_correction.hpp"
 
-#include "pinocchio/algorithm/kinematics.hpp"
 #include "pinocchio/algorithm/jacobian.hpp"
 #include "pinocchio/algorithm/rnea.hpp"
 #include "pinocchio/algorithm/frames.hpp"
@@ -12,20 +11,20 @@
 
 namespace openarm_impedance_control {
 
-Impedance::Impedance(
+CartesianCorrection::CartesianCorrection(
     const std::string& urdf_string,
     const std::vector<std::string>& joint_names,
     const std::string& ee_frame_name,
-    const std::vector<double>& torque_limits,
-    bool do_gravity_compensation,
-    bool do_damping,
-    bool do_stiffness)
-  : torque_limits_(torque_limits),
+    std::vector<double> torque_limits,
+    const std::vector<double> k_joint_gains,
+    const std::vector<double> d_joint_gains,
+    bool do_gravity_compensation)
+  : torque_limits_(std::move(torque_limits)),
     do_gravity_compensation_(do_gravity_compensation),
-    do_damping_(do_damping),
-    do_stiffness_(do_stiffness),
-    K_(Eigen::Matrix<double, 6, 6>::Zero()),
-    D_(Eigen::Matrix<double, 6, 6>::Zero())
+    K_joint_(Eigen::Map<const Eigen::VectorXd>(k_joint_gains.data(), k_joint_gains.size()).asDiagonal()),
+    D_joint_(Eigen::Map<const Eigen::VectorXd>(d_joint_gains.data(), d_joint_gains.size()).asDiagonal()),
+    relax_K_(Eigen::Matrix<double, 6, 6>::Zero()),
+    relax_D_(Eigen::Matrix<double, 6, 6>::Zero())
 {
   try {
     // Build the full model from URDF (contains every joint: both arms, grippers)
@@ -61,19 +60,21 @@ Impedance::Impedance(
       throw std::runtime_error("EE frame '" + ee_frame_name + "' not found in reduced model");
     }
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("CartesianImpedance init failed: ") + e.what());
+    throw std::runtime_error(std::string("Impedance controller init failed: ") + e.what());
   }
 }
 
-void Impedance::setStiffness(const std::vector<double>& k_gains) {
-  K_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(k_gains.data()).asDiagonal();
+void CartesianCorrection::setStiffness(const std::vector<double>& k_gains) {
+  relax_K_.setIdentity();
+  relax_K_.diagonal() -= Eigen::Map<const Eigen::Matrix<double, 6, 1>>(k_gains.data());
 }
 
-void Impedance::setDamping(const std::vector<double>& d_gains) {
-  D_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(d_gains.data()).asDiagonal();
+void CartesianCorrection::setDamping(const std::vector<double>& d_gains) {
+  relax_D_.setIdentity();
+  relax_D_.diagonal() -= Eigen::Map<const Eigen::Matrix<double, 6, 1>>(d_gains.data());
 }
 
-Eigen::VectorXd Impedance::computeControl(
+Eigen::VectorXd CartesianCorrection::computeControl(
     const Eigen::VectorXd& q,
     const Eigen::VectorXd& dq,
     const Eigen::VectorXd& q_ref,
@@ -89,16 +90,14 @@ Eigen::VectorXd Impedance::computeControl(
       pinocchio_model_, pinocchio_data_, ee_frame_id_,
       pinocchio::LOCAL_WORLD_ALIGNED, J);
 
-  // Compute joint space K and D matrices
-  const int nv = pinocchio_model_.nv;
-  Eigen::MatrixXd Kq = J.transpose() * K_ * J
-                    + kEpsilon * Eigen::MatrixXd::Identity(nv, nv);
-  Eigen::MatrixXd Dq = J.transpose() * D_ * J;
 
-  // Compute torques from impedance control law
+  Eigen::MatrixXd J_pinv = J.completeOrthogonalDecomposition().pseudoInverse();
+  Eigen::MatrixXd K_bar = J_pinv.transpose() * K_joint_ * J_pinv;
+  Eigen::MatrixXd D_bar = J_pinv.transpose() * D_joint_ * J_pinv;
+
   Eigen::VectorXd tau = Eigen::VectorXd::Zero(pinocchio_model_.nv);
-  if (do_stiffness_) tau += Kq * (q_ref - q);
-  if (do_damping_)   tau += Dq * (dq_ref - dq);
+  tau += J.transpose() * relax_K_ * K_bar * J * (q_ref - q);
+  tau += J.transpose() * relax_D_ * D_bar * J * (dq_ref - dq);
 
   // Add gravity compensation torques if enabled
   if (do_gravity_compensation_) {
@@ -111,16 +110,16 @@ Eigen::VectorXd Impedance::computeControl(
   return tau;
 }
 
-void Impedance::clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits) {
+void CartesianCorrection::clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits) {
   for (size_t i = 0; i < limits.size(); ++i) {
     if (v(i) < -limits[i]) {
-      std::cerr << "[Impedance] Clamping [" << i << "] to lower limit " << -limits[i] << "\n";
+      std::cerr << "[CartesianCorrection] Clamping [" << i << "] to lower limit " << -limits[i] << "\n";
       v(i) = -limits[i];
     } else if (v(i) > limits[i]) {
-      std::cerr << "[Impedance] Clamping [" << i << "] to upper limit " << limits[i] << "\n";
+      std::cerr << "[CartesianCorrection] Clamping [" << i << "] to upper limit " << limits[i] << "\n";
       v(i) = limits[i];
     }
   }
 }
 
-}  // namespace openarm_impedance
+}  // namespace openarm_impedance_control

@@ -11,16 +11,16 @@
 
 namespace openarm_impedance_control {
 
-class Impedance {
+class CartesianCorrection {
  public:
-  Impedance(
+  CartesianCorrection(
       const std::string& urdf_string,
       const std::vector<std::string>& joint_names,
       const std::string& ee_frame_name,
-      const std::vector<double>& torque_limits,
-      bool do_gravity_compensation = true,
-      bool do_damping = true,
-      bool do_stiffness = true);
+      std::vector<double> torque_limits,
+      std::vector<double> k_joint_gains,
+      std::vector<double> d_joint_gains,
+      bool do_gravity_compensation = true);
 
   void setStiffness(const std::vector<double>& k_gains);
   void setDamping(const std::vector<double>& d_gains);
@@ -35,10 +35,8 @@ class Impedance {
   // Limits
   const std::vector<double> torque_limits_;
 
-  // Control flags
+  // Control flag
   bool do_gravity_compensation_;
-  bool do_damping_;
-  bool do_stiffness_;
 
   // Pinocchio
   pinocchio::Model      pinocchio_model_;
@@ -46,8 +44,10 @@ class Impedance {
   pinocchio::FrameIndex ee_frame_id_;
 
   // Impedance gains
-  Eigen::Matrix<double, 6, 6> K_;
-  Eigen::Matrix<double, 6, 6> D_;
+  Eigen::Matrix<double, 6, 6> K_joint_;
+  Eigen::Matrix<double, 6, 6> D_joint_;
+  Eigen::Matrix<double, 6, 6> relax_K_; // Cartesian stiffness gain
+  Eigen::Matrix<double, 6, 6> relax_D_; // Cartesian damping gain
   constexpr static double kEpsilon = 1.0;
 
   // Helper functions

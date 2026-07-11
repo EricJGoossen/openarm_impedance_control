@@ -15,7 +15,7 @@
 #include "eigen3/Eigen/Core"
 #include "eigen3/Eigen/Geometry"
 
-#include "openarm_impedance_control/impedance.hpp"
+#include "openarm_impedance_control/cartesian_correction.hpp"
 
 namespace openarm_impedance_control {
 
@@ -45,7 +45,7 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Configuration 
   std::vector<std::string> joint_names_;
-  std::optional<Impedance> impedance_controller_;
+  std::optional<CartesianCorrection> correction_controller_;
 
   // Trajectory tracking 
   realtime_tools::RealtimeBuffer<std::shared_ptr<JointTrajectory>> trajectory_buffer_;

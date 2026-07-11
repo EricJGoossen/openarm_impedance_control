@@ -10,8 +10,10 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
   auto_declare<std::vector<std::string>>("joints", std::vector<std::string>{});
   auto_declare<std::string>("robot_description", "");
   auto_declare<std::vector<double>>("joint_torque_limits", std::vector<double>(7, INFINITY));
-  auto_declare<std::vector<double>>("k_gains", std::vector<double>(6, 0.0));
-  auto_declare<std::vector<double>>("d_gains", std::vector<double>(6, 0.0));
+  auto_declare<std::vector<double>>("k_cartesian_gains", std::vector<double>(6, 0.0));
+  auto_declare<std::vector<double>>("d_cartesian_gains", std::vector<double>(6, 0.0));
+  auto_declare<std::vector<double>>("k_joint_gains", std::vector<double>(7, 0.0));
+  auto_declare<std::vector<double>>("d_joint_gains", std::vector<double>(7, 0.0));
   auto_declare<std::string>("ee_frame_name", "tool0");
 
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
@@ -26,21 +28,24 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
   }
 
   try {
-    impedance_controller_.emplace(
+    correction_controller_.emplace(
       urdf_string,
       joint_names_,
       get_node()->get_parameter("ee_frame_name").as_string(),
-      joint_torque_limits);
+      joint_torque_limits,
+      get_node()->get_parameter("k_joint_gains").as_double_array(),
+      get_node()->get_parameter("d_joint_gains").as_double_array()
+    );
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(),
       "Failed to construct Impedance: %s", e.what());
     return CallbackReturn::ERROR;
   }
 
-  impedance_controller_->setStiffness(
-      get_node()->get_parameter("k_gains").as_double_array());
-  impedance_controller_->setDamping(
-      get_node()->get_parameter("d_gains").as_double_array());
+  correction_controller_->setStiffness(
+      get_node()->get_parameter("k_cartesian_gains").as_double_array());
+  correction_controller_->setDamping(
+      get_node()->get_parameter("d_cartesian_gains").as_double_array());
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
       std::bind(&OpenArmImpedanceController::onParameterChange,
@@ -51,14 +56,18 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
 
 controller_interface::CallbackReturn OpenArmImpedanceController::on_activate(
     const rclcpp_lifecycle::State& /* state */) {
-      
-  if (state_interfaces_.size() != 2 * n || command_interfaces_.size() != n) {
+  const size_t n = joint_names_.size();
+
+  if (state_interfaces_.size() != 2 * n || command_interfaces_.size() != n * 3) {
     RCLCPP_ERROR(get_node()->get_logger(), "Interface count mismatch");
     return CallbackReturn::ERROR;
   }
 
-  for (auto& cmd : command_interfaces_) {
-    (void)cmd.set_value(0.0);
+  for (size_t i = 0; i < n; ++i) {
+    const double current_pos = state_interfaces_[i * 2].get_value();
+    (void)command_interfaces_[i * 3    ].set_value(current_pos);  // hold current position
+    (void)command_interfaces_[i * 3 + 1].set_value(0.0);          // zero velocity
+    (void)command_interfaces_[i * 3 + 2].set_value(0.0);          // zero torque
   }
 
   trajectory_buffer_.writeFromNonRT(nullptr);
@@ -70,7 +79,6 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_activate(
   feedback_count_ = 0;
 
   // Seed reference to current joint state so the arm holds in place
-  const size_t n = joint_names_.size();
   q_ref_  = Eigen::VectorXd(n);
   dq_ref_ = Eigen::VectorXd::Zero(n);
   for (size_t i = 0; i < n; ++i) {
@@ -95,9 +103,14 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_deactivate(
       active_goal_.reset();
     }
   }
-  for (auto& cmd : command_interfaces_) {
-    (void)cmd.set_value(0.0);
+
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const double current_pos = state_interfaces_[i * 2].get_value();
+    (void)command_interfaces_[i * 3    ].set_value(current_pos);  // hold current position
+    (void)command_interfaces_[i * 3 + 1].set_value(0.0);          // zero velocity
+    (void)command_interfaces_[i * 3 + 2].set_value(0.0);          // zero torque
   }
+
   RCLCPP_INFO(get_node()->get_logger(), "OpenArm Impedance Controller deactivated");
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -127,6 +140,8 @@ OpenArmImpedanceController::command_interface_configuration() const {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
   for (const auto& name : joint_names_) {
+    config.names.push_back(name + "/position");
+    config.names.push_back(name + "/velocity");
     config.names.push_back(name + "/effort");
   }
   return config;
@@ -162,9 +177,11 @@ controller_interface::return_type OpenArmImpedanceController::update(
   }
 
   const Eigen::VectorXd torques =
-      impedance_controller_->computeControl(q, dq, q_ref_, dq_ref_);
+      correction_controller_->computeControl(q, dq, q_ref_, dq_ref_);
   for (size_t i = 0; i < n; ++i) {
-    (void)command_interfaces_[i].set_value(torques[i]);
+    (void)command_interfaces_[i * 3    ].set_value(q_ref_[i]);
+    (void)command_interfaces_[i * 3 + 1].set_value(dq_ref_[i]);
+    (void)command_interfaces_[i * 3 + 2].set_value(torques[i]);
   }
 
   std::shared_ptr<GoalHandle> goal;
@@ -231,9 +248,7 @@ void OpenArmImpedanceController::interpolateTrajectory(
   }
 
   auto to_eigen = [n](const std::vector<double>& v) {
-    Eigen::VectorXd out = Eigen::VectorXd::Zero(n);
-    for (size_t i = 0; i < n && i < v.size(); ++i) out[i] = v[i];
-    return out;
+    return Eigen::Map<const Eigen::VectorXd>(v.data(), n);
   };
 
   if (rclcpp::Duration(points.back().time_from_start) <= elapsed) {
@@ -277,11 +292,20 @@ rclcpp_action::GoalResponse OpenArmImpedanceController::onGoalRequest(
     RCLCPP_WARN(get_node()->get_logger(), "Rejected empty trajectory");
     return rclcpp_action::GoalResponse::REJECT;
   }
-  // Reject if joint set doesn't match (order-insensitive check)
   if (goal->trajectory.joint_names.size() != joint_names_.size()) {
     RCLCPP_WARN(get_node()->get_logger(), "Rejected: joint count mismatch");
     return rclcpp_action::GoalResponse::REJECT;
   }
+
+  const auto& goal_names = goal->trajectory.joint_names;
+  for (const auto& name : joint_names_) {
+    if (std::find(goal_names.begin(), goal_names.end(), name) == goal_names.end()) {
+      RCLCPP_WARN(get_node()->get_logger(),
+        "Rejected: joint '%s' not found in goal trajectory", name.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+  }
+
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -305,9 +329,9 @@ void OpenArmImpedanceController::onGoalAccepted(std::shared_ptr<GoalHandle> goal
 
   const auto& goal_names = goal_handle->get_goal()->trajectory.joint_names;
   std::vector<size_t> map(goal_names.size()); 
+  const size_t n = joint_names_.size();
   for (size_t k = 0; k < goal_names.size(); ++k) {
     auto it = std::find(goal_names.begin(), goal_names.end(), joint_names_[k]);
-    if (it == goal_names.end()) { /* abort goal, return */ }
     map[k] = std::distance(goal_names.begin(), it);
   }
   // reorder each point's positions/velocities into joint_names_ order
@@ -322,7 +346,6 @@ void OpenArmImpedanceController::onGoalAccepted(std::shared_ptr<GoalHandle> goal
   }
 
   // Prepend current reference as the start point at t=0
-  const size_t n = joint_names_.size();
   trajectory_msgs::msg::JointTrajectoryPoint start_pt;
   start_pt.positions.assign(q_ref_.data(), q_ref_.data() + n);
   start_pt.velocities.assign(n, 0.0);
@@ -339,10 +362,24 @@ OpenArmImpedanceController::onParameterChange(const std::vector<rclcpp::Paramete
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
   for (const auto& p : params) {
-    if (p.get_name() == "k_gains") {
-      impedance_controller_->setStiffness(p.as_double_array());
-    } else if (p.get_name() == "d_gains") {
-      impedance_controller_->setDamping(p.as_double_array());
+    if (p.get_name() == "k_cartesian_gains") {
+      const auto gains = p.as_double_array();
+      if (gains.size() != 6) {
+        result.successful = false;
+        result.reason = "k_cartesian_gains must have exactly 6 elements, got " +
+                         std::to_string(gains.size());
+        continue;
+      }
+      correction_controller_->setStiffness(gains);
+    } else if (p.get_name() == "d_cartesian_gains") {
+      const auto gains = p.as_double_array();
+      if (gains.size() != 6) {
+        result.successful = false;
+        result.reason = "d_cartesian_gains must have exactly 6 elements, got " +
+                         std::to_string(gains.size());
+        continue;
+      }
+      correction_controller_->setDamping(gains);
     }
   }
   return result;
