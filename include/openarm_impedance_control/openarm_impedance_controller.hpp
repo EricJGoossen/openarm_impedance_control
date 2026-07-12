@@ -59,6 +59,10 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   // matter what kp/kd it was configured with.
   bool zero_motor_pd_{true};
 
+  // Runtime velocity trip. 
+  double cartesian_velocity_limit_{0.0};
+  bool cartesian_velocity_limit_enabled_{false};
+
   // Trajectory tracking
   realtime_tools::RealtimeBuffer<std::shared_ptr<JointTrajectory>> trajectory_buffer_;
   rclcpp::Time trajectory_start_time_;
@@ -94,6 +98,14 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Throttled reporting of the joint torque / Cartesian wrench clamps. 
   void reportClampWarnings(std::uint32_t torque_clamp_mask, std::uint32_t wrench_clamp_mask);
+
+  // True if the measured joint velocities or TCP speed exceed their limits.
+  // Logs which one and why. Allocation-free.
+  bool checkVelocityTrip(const Eigen::VectorXd& dq, const Eigen::Vector3d& tcp_vel);
+
+  // Logs a hardware_interface set_value() failure. Throttled; does not by
+  // itself stop the controller -- see the call sites for what happens next.
+  void reportInterfaceWriteFailure(const char* what, size_t joint_idx);
 
   rcl_interfaces::msg::SetParametersResult onParameterChange(
       const std::vector<rclcpp::Parameter>& params);
