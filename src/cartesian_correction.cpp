@@ -100,24 +100,24 @@ Eigen::VectorXd CartesianCorrection::computeControl(
       pinocchio_model_, pinocchio_data_, ee_frame_id_,
       pinocchio::LOCAL_WORLD_ALIGNED, J);
 
-
-  Eigen::MatrixXd J_pinv = J.completeOrthogonalDecomposition().pseudoInverse();
-  Eigen::MatrixXd K_bar = J_pinv.transpose() * K_joint_ * J_pinv;
-  Eigen::MatrixXd D_bar = J_pinv.transpose() * D_joint_ * J_pinv;
-
-  Eigen::VectorXd tau = Eigen::VectorXd::Zero(pinocchio_model_.nv);
-  tau += J.transpose() * relax_K_ * K_bar * J * (q_ref - q);
-  tau += J.transpose() * relax_D_ * D_bar * J * (dq_ref - dq);
-
-  // Add gravity compensation torques if enabled
-  if (do_gravity_compensation_) {
-    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(pinocchio_model_.nv);
-    tau += pinocchio::rnea(pinocchio_model_, pinocchio_data_, q, zero, zero);
-  }
-
-  clamp(tau, torque_limits_, "joint torque limits");
-
-  return tau;
+  Eigen::MatrixXd JJt = J * J.transpose(); 
+  Eigen::MatrixXd J_pinv = J.transpose() * 
+      (JJt + kLambda2 * Eigen::MatrixXd::Identity(6, 6)).inverse(); 
+       
+  Eigen::MatrixXd K_bar = J_pinv.transpose() * K_joint_ * J_pinv; 
+  Eigen::MatrixXd D_bar = J_pinv.transpose() * D_joint_ * J_pinv; 
+  
+  Eigen::VectorXd tau = Eigen::VectorXd::Zero(pinocchio_model_.nv); 
+  tau += J.transpose() * relax_K_ * K_bar * J * (q - q_ref); 
+  tau += J.transpose() * relax_D_ * D_bar * J * (dq - dq_ref); 
+  
+  if (do_gravity_compensation_) { 
+    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(pinocchio_model_.nv); 
+    tau += pinocchio::rnea(pinocchio_model_, pinocchio_data_, q, zero, zero); 
+  } 
+  
+  clamp(tau, torque_limits_, "joint torque limits"); 
+  return tau; 
 }
 
 void CartesianCorrection::clamp(Eigen::Ref<Eigen::VectorXd> v, double lower_limit, double upper_limit, const std::string& context) {

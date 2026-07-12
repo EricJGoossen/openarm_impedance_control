@@ -43,6 +43,10 @@ class CartesianCorrection {
   pinocchio::Data       pinocchio_data_;
   pinocchio::FrameIndex ee_frame_id_;
 
+  // Epsilon constants
+  constexpr static double kLambda = 0.1;
+  constexpr static double kLambda2 = kLambda * kLambda;
+
   // Impedance gains
   Eigen::MatrixXd K_joint_;
   Eigen::MatrixXd D_joint_;

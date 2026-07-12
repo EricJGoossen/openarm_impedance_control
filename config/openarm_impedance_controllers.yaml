@@ -1,6 +1,6 @@
 controller_manager:
   ros__parameters:
-    update_rate: 500
+    update_rate: 750
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -29,7 +29,7 @@ left_impedance_controller:
       - openarm_left_joint6
       - openarm_left_joint7
     ee_frame_name: openarm_left_hand_tcp
-    k_cartesian_gains: [0.5, 1.0, 1.0, 1.0, 1.0, 1.0]
+    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
     # Per-joint torque clamp (Nm) — rated torques by motor:
@@ -37,7 +37,7 @@ left_impedance_controller:
     #   joint  3:   DM-J4340P (~25 Nm rated)
     #   joint  4:   DM-J4340  (~20 Nm rated)
     #   joints 5-7: DM-J4310  (~10 Nm rated)
-    joint_torque_limits: [20.0, 20.0, 15.0, 10.0, 5.0, 5.0, 5.0]
+    joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 
 right_impedance_controller:
@@ -59,7 +59,7 @@ right_impedance_controller:
     #   joint  3:   DM-J4340P (~25 Nm rated)
     #   joint  4:   DM-J4340  (~20 Nm rated)
     #   joints 5-7: DM-J4310  (~10 Nm rated)
-    joint_torque_limits: [20.0, 20.0, 15.0, 10.0, 5.0, 5.0, 5.0]
+    joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 
 left_gripper_controller:
