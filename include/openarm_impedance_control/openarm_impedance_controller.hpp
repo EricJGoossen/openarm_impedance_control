@@ -19,6 +19,7 @@
 #include "eigen3/Eigen/Geometry"
 
 #include "openarm_impedance_control/impedance_law.hpp"
+#include "openarm_impedance_control/goal_limits.hpp"
 
 namespace openarm_impedance_controller {
 
@@ -50,6 +51,9 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   std::vector<std::string> joint_names_;
   std::optional<ImpedanceLaw> impedance_law_;
 
+  // Joint-space and Cartesian position limits
+  std::optional<GoalLimits> goal_limits_;
+
   // When true the position and velocity command interfaces are written with the *measured* state, 
   // so the motors' MIT-mode PD sees zero error and contributes zero torque no
   // matter what kp/kd it was configured with.
@@ -74,6 +78,9 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   size_t feedback_count_{0};
   static constexpr size_t kFeedbackStride = 6;
 
+  // Throttle period (ms) for the runtime limit warnings.
+  static constexpr int kLimitWarnPeriodMs = 1000;
+
   // Parameter callback
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
   mutable std::mutex gain_mutex_;  // guards runtime gain writes into the model
@@ -81,6 +88,12 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   // Helpers
   void interpolateTrajectory(const JointTrajectory& traj, const rclcpp::Time& time);
   void updateFeedback(const Eigen::VectorXd& q, const Eigen::VectorXd& dq);
+
+  // map[k] = index of joint_names_[k] within goal_names. 
+  std::vector<size_t> buildJointMap(const std::vector<std::string>& goal_names) const;
+
+  // Throttled reporting of the joint torque / Cartesian wrench clamps. 
+  void reportClampWarnings(std::uint32_t torque_clamp_mask, std::uint32_t wrench_clamp_mask);
 
   rcl_interfaces::msg::SetParametersResult onParameterChange(
       const std::vector<rclcpp::Parameter>& params);

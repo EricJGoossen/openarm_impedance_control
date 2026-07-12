@@ -7,6 +7,10 @@
 
 namespace openarm_impedance_controller {
 
+namespace {
+constexpr const char* kWrenchName[6] = {"fx", "fy", "fz", "mx", "my", "mz"};
+}  // namespace
+
 // Lifecycle
 
 controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
@@ -14,37 +18,48 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
   auto_declare<std::string>("robot_description", "");
   auto_declare<std::string>("ee_frame_name", "tool0");
   auto_declare<std::vector<double>>("joint_torque_limits", std::vector<double>(7, 1.0));
-
+ 
+  // Hard Cartesian torque limit [fx fy fz mx my mz] (N, N*m), clamped on the
+  // task wrench before it is mapped through J^T.
+  auto_declare<std::vector<double>>("cartesian_wrench_limits", std::vector<double>(6, 1.0));
+ 
   // Absolute Cartesian impedance [x y z rx ry rz]. 
   auto_declare<std::vector<double>>("k_cartesian", std::vector<double>(6, 0.0));
   auto_declare<std::vector<double>>("d_cartesian", std::vector<double>(6, 0.0));
-
+ 
   // Per-axis scale in [0, 1]. 
   auto_declare<std::vector<double>>("k_cartesian_scale", std::vector<double>(6, 1.0));
   auto_declare<std::vector<double>>("d_cartesian_scale", std::vector<double>(6, 1.0));
-
+ 
   // Null-space joint impedance.
   auto_declare<std::vector<double>>("k_nullspace", std::vector<double>(7, 0.0));
   auto_declare<std::vector<double>>("d_nullspace", std::vector<double>(7, 0.0));
-
+ 
+  // TCP workspace box [x y z], metres, base frame. Empty = no Cartesian check.
+  auto_declare<std::vector<double>>("cartesian_position_min", std::vector<double>{});
+  auto_declare<std::vector<double>>("cartesian_position_max", std::vector<double>{});
+ 
+  // Margin (rad) pulled in from each URDF joint limit when validating goals.
+  auto_declare<double>("joint_position_margin", 0.0);
+ 
   // "world" or "tcp" -- the frame the Cartesian diagonals are expressed in.
   auto_declare<std::string>("compliance_frame", "world");
   auto_declare<bool>("do_gravity_compensation", true);
   auto_declare<bool>("zero_motor_pd", true);
-
+ 
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
   if (joint_names_.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "`joints` parameter is empty");
     return CallbackReturn::ERROR;
   }
-
+ 
   const std::string urdf_string =
       get_node()->get_parameter("robot_description").as_string();
   if (urdf_string.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "robot_description parameter is empty");
     return CallbackReturn::ERROR;
   }
-
+ 
   const std::string frame_str =
       get_node()->get_parameter("compliance_frame").as_string();
   if (frame_str != "world" && frame_str != "tcp") {
@@ -52,20 +67,21 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
       "compliance_frame must be 'world' or 'tcp', got '%s'", frame_str.c_str());
     return CallbackReturn::ERROR;
   }
-
+ 
   zero_motor_pd_ = get_node()->get_parameter("zero_motor_pd").as_bool();
-
+ 
   try {
     impedance_law_.emplace(
         urdf_string,
         joint_names_,
         get_node()->get_parameter("ee_frame_name").as_string(),
         get_node()->get_parameter("joint_torque_limits").as_double_array(),
+        get_node()->get_parameter("cartesian_wrench_limits").as_double_array(),
         get_node()->get_parameter("do_gravity_compensation").as_bool());
-
+ 
     impedance_law_->setComplianceFrame(
         frame_str == "tcp" ? ComplianceFrame::kTcp : ComplianceFrame::kWorld);
-
+ 
     impedance_law_->setCartesianStiffness(
         get_node()->get_parameter("k_cartesian").as_double_array());
     impedance_law_->setCartesianDamping(
@@ -83,7 +99,22 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
                  "Failed to construct Impedance: %s", e.what());
     return CallbackReturn::ERROR;
   }
-
+ 
+  // Joint position limits are the URDF's, in `joints` order
+  try {
+    goal_limits_.emplace(
+        joint_names_,
+        impedance_law_->jointLowerLimits(),
+        impedance_law_->jointUpperLimits(),
+        get_node()->get_parameter("joint_position_margin").as_double(),
+        get_node()->get_parameter("cartesian_position_min").as_double_array(),
+        get_node()->get_parameter("cartesian_position_max").as_double_array());
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Failed to construct GoalLimits: %s", e.what());
+    return CallbackReturn::ERROR;
+  }
+  goal_limits_->logSummary(get_node()->get_logger());
+ 
   if (zero_motor_pd_) {
     RCLCPP_WARN(get_node()->get_logger(),
       "zero_motor_pd=true: the motors' local PD loop is neutralised (position/"
@@ -91,19 +122,19 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
       "this controller's effort command at the update rate. Verify gravity comp "
       "with k_cartesian = 0 before raising any gain.");
   }
-
+ 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
       std::bind(&OpenArmImpedanceController::onParameterChange,
                 this, std::placeholders::_1));
-
+ 
   return CallbackReturn::SUCCESS;
 }
-
+ 
 controller_interface::CallbackReturn OpenArmImpedanceController::on_configure(
     const rclcpp_lifecycle::State& /* state */) {
   const std::string action_name =
       std::string("/") + get_node()->get_name() + "/follow_joint_trajectory";
-
+ 
   action_server_ = rclcpp_action::create_server<FollowJointTrajectoryAction>(
       get_node(),
       action_name,
@@ -113,7 +144,7 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_configure(
                 this, std::placeholders::_1),
       std::bind(&OpenArmImpedanceController::onGoalAccepted,
                 this, std::placeholders::_1));
-
+ 
   return CallbackReturn::SUCCESS;
 }
 
@@ -138,6 +169,13 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_activate(
     (void)command_interfaces_[i * 3 + 1].set_value(zero_motor_pd_ ? vel : 0.0);
     (void)command_interfaces_[i * 3 + 2].set_value(0.0);  // zero torque
   }
+
+  // The arm may activate outside its own limits 
+  const Eigen::Vector3d tcp = goal_limits_->cartesianEnabled()
+      ? impedance_law_->tcpPosition(q_ref_)
+      : Eigen::Vector3d::Zero();
+  goal_limits_->reportViolations(q_ref_, tcp, get_node()->get_logger(),
+                                *get_node()->get_clock(), kLimitWarnPeriodMs);
 
   trajectory_buffer_.writeFromNonRT(nullptr);
   feedback_msg_ = std::make_shared<FollowJointTrajectoryAction::Feedback>();
@@ -222,9 +260,15 @@ controller_interface::return_type OpenArmImpedanceController::update(
   }
 
   Eigen::VectorXd torques;
+  std::uint32_t torque_clamp_mask = 0;
+  std::uint32_t wrench_clamp_mask = 0;
+  Eigen::Vector3d tcp = Eigen::Vector3d::Zero();
   {
     std::lock_guard<std::mutex> lock(gain_mutex_);
     torques = impedance_law_->computeControl(q, dq, q_ref_, dq_ref_);
+    torque_clamp_mask = impedance_law_->torqueClampMask();
+    wrench_clamp_mask = impedance_law_->wrenchClampMask();
+    tcp               = impedance_law_->lastTcpPosition();  // free, already computed
   }
 
   for (size_t i = 0; i < n; ++i) {
@@ -235,6 +279,12 @@ controller_interface::return_type OpenArmImpedanceController::update(
     (void)command_interfaces_[i * 3 + 1].set_value(zero_motor_pd_ ? dq[i] : dq_ref_[i]);
     (void)command_interfaces_[i * 3 + 2].set_value(torques[i]);
   }
+
+  // Report, don't react: the torques above already honour both clamps, and
+  // the position boxes are enforced by rejecting goals, not at runtime.
+  reportClampWarnings(torque_clamp_mask, wrench_clamp_mask);
+  goal_limits_->reportViolations(q, tcp, get_node()->get_logger(),
+                                *get_node()->get_clock(), kLimitWarnPeriodMs);
 
   std::shared_ptr<GoalHandle> goal;
   {
@@ -280,6 +330,29 @@ controller_interface::return_type OpenArmImpedanceController::update(
   goal->publish_feedback(feedback_msg_);
 
   return controller_interface::return_type::OK;
+}
+
+// Torque / wrench clamp reporting. 
+
+void OpenArmImpedanceController::reportClampWarnings(
+    std::uint32_t torque_clamp_mask, std::uint32_t wrench_clamp_mask) {
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    if (torque_clamp_mask & (1u << i)) {
+      RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+        kLimitWarnPeriodMs,
+        "Clamping joint torque limit on '%s'. Commanded impedance exceeds what "
+        "this joint can produce; tracking error will grow.",
+        joint_names_[i].c_str());
+    }
+  }
+  for (size_t i = 0; i < 6; ++i) {
+    if (wrench_clamp_mask & (1u << i)) {
+      RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+        kLimitWarnPeriodMs,
+        "Clamping Cartesian torque limit on %s (cartesian_wrench_limits).",
+        kWrenchName[i]);
+    }
+  }
 }
 
 // Trajectory Helpers
@@ -335,6 +408,17 @@ void OpenArmImpedanceController::updateFeedback(
   feedback_msg_->error.velocities.assign(dqe.data(), dqe.data() + n);
 }
 
+std::vector<size_t> OpenArmImpedanceController::buildJointMap(
+    const std::vector<std::string>& goal_names) const {
+  const size_t n = joint_names_.size();
+  std::vector<size_t> map(n);
+  for (size_t k = 0; k < n; ++k) {
+    const auto it = std::find(goal_names.begin(), goal_names.end(), joint_names_[k]);
+    map[k] = static_cast<size_t>(std::distance(goal_names.begin(), it));
+  }
+  return map;
+}
+
 // Action Server Callbacks
 
 rclcpp_action::GoalResponse OpenArmImpedanceController::onGoalRequest(
@@ -372,6 +456,12 @@ rclcpp_action::GoalResponse OpenArmImpedanceController::onGoalRequest(
     }
   }
 
+  // Position limits, joint-space and Cartesian.
+  if (!goal_limits_->validate(goal->trajectory, buildJointMap(goal_names),
+                              *impedance_law_, get_node()->get_logger())) {
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -386,12 +476,7 @@ void OpenArmImpedanceController::onGoalAccepted(std::shared_ptr<GoalHandle> goal
   auto traj = std::make_shared<JointTrajectory>(goal_handle->get_goal()->trajectory);
   const auto& goal_names = traj->joint_names;
 
-  // map[k] = index of joint_names_[k] within the goal's joint_names
-  std::vector<size_t> map(n);
-  for (size_t k = 0; k < n; ++k) {
-    const auto it = std::find(goal_names.begin(), goal_names.end(), joint_names_[k]);
-    map[k] = static_cast<size_t>(std::distance(goal_names.begin(), it));
-  }
+  const std::vector<size_t> map = buildJointMap(goal_names);
 
   for (auto& pt : traj->points) {
     std::vector<double> p(n), v(n, 0.0);
@@ -412,7 +497,7 @@ void OpenArmImpedanceController::onGoalAccepted(std::shared_ptr<GoalHandle> goal
     active_goal_->abort(result);
   }
 
-  // Prepend the current reference as the start point at t=0
+  // Prepend the current reference as the start point at t=0.
   trajectory_msgs::msg::JointTrajectoryPoint start_pt;
   start_pt.positions.assign(q_ref_.data(), q_ref_.data() + n);
   start_pt.velocities.assign(n, 0.0);
@@ -447,6 +532,13 @@ OpenArmImpedanceController::onParameterChange(const std::vector<rclcpp::Paramete
         impedance_law_->setNullspaceStiffness(p.as_double_array());
       } else if (name == "d_nullspace") {
         impedance_law_->setNullspaceDamping(p.as_double_array());
+      } else if (name == "joint_torque_limits" ||
+                 name == "cartesian_wrench_limits" ||
+                 name == "cartesian_position_min" ||
+                 name == "cartesian_position_max" ||
+                 name == "joint_position_margin") {
+        result.successful = false;
+        result.reason = name + " is fixed at configure time; edit the YAML and relaunch";
       } else if (name == "compliance_frame") {
         const std::string f = p.as_string();
         if (f != "world" && f != "tcp") {

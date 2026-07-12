@@ -27,7 +27,8 @@ controller_manager:
 #   3. Raise k_cartesian translational: 10 -> 25 -> 50 -> ... N/m.
 #   4. Raise k_cartesian rotational separately: 0.5 -> 1 -> 2 N*m/rad.
 #   5. Damping ~ 2*sqrt(K * M_eff), or raise until oscillation stops.
-# joint_torque_limits is the hard backstop the whole way through.
+# joint_torque_limits and cartesian_wrench_limits are the hard backstops the
+# whole way through.
 # ---------------------------------------------------------------------------
 
 left_impedance_controller:
@@ -63,12 +64,26 @@ left_impedance_controller:
     k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
+    # TCP workspace box (m, base frame). A goal is rejected whole if any
+    # waypoint's TCP falls outside. Set both to [] to disable the check.
+    cartesian_position_min: [-0.8, -0.8, 0.0]
+    cartesian_position_max: [ 0.8,  0.8, 1.2]
+
+    # Joint position limits are read from the URDF -- there is no override here.
+    # This margin (rad) is pulled in from each side when validating goals, so
+    # waypoints must land strictly inside the mechanical range.
+    joint_position_margin: 0.05
+
+    # Hard Cartesian torque limit [fx fy fz mx my mz] (N, N*m). Clamped on the
+    # commanded task wrench every cycle, before J^T. Halve for first bring-up.
+    cartesian_wrench_limits: [40.0, 40.0, 40.0, 10.0, 10.0, 10.0]
+
     # Per-joint torque clamp (Nm) — rated torques by motor:
     #   joints 1-2: DM-J8009P (~45 Nm rated)
     #   joint  3:   DM-J4340P (~25 Nm rated)
     #   joint  4:   DM-J4340  (~20 Nm rated)
     #   joints 5-7: DM-J4310  (~10 Nm rated)
-    # HALVE THESE for first bring-up of the direct-torque loop.
+    # HALVE THESE for first bring-up of the direct-torque loop 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 
@@ -95,6 +110,12 @@ right_impedance_controller:
 
     k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    cartesian_position_min: [-0.8, -0.8, 0.0]
+    cartesian_position_max: [ 0.8,  0.8, 1.2]
+    joint_position_margin: 0.05
+
+    cartesian_wrench_limits: [40.0, 40.0, 40.0, 10.0, 10.0, 10.0]
 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 

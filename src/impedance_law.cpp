@@ -1,6 +1,7 @@
 #include "openarm_impedance_control/impedance_law.hpp"
 
 #include "pinocchio/algorithm/jacobian.hpp"
+#include "pinocchio/algorithm/kinematics.hpp"
 #include "pinocchio/algorithm/rnea.hpp"
 #include "pinocchio/algorithm/frames.hpp"
 #include "pinocchio/algorithm/model.hpp"
@@ -8,7 +9,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <stdexcept>
 
 namespace openarm_impedance_controller {
@@ -18,8 +18,10 @@ ImpedanceLaw::ImpedanceLaw(
     const std::vector<std::string>& joint_names,
     const std::string& ee_frame_name,
     std::vector<double> torque_limits,
+    std::vector<double> cartesian_wrench_limits,
     bool do_gravity_compensation)
   : torque_limits_(std::move(torque_limits)),
+    cartesian_wrench_limits_(std::move(cartesian_wrench_limits)),
     do_gravity_compensation_(do_gravity_compensation)
 {
   try {
@@ -46,7 +48,8 @@ ImpedanceLaw::ImpedanceLaw(
 
     const Eigen::VectorXd q_ref = pinocchio::neutral(full_model);
     pinocchio::buildReducedModel(full_model, joints_to_lock, q_ref, pinocchio_model_);
-    pinocchio_data_ = pinocchio::Data(pinocchio_model_);
+    pinocchio_data_  = pinocchio::Data(pinocchio_model_);
+    validation_data_ = pinocchio::Data(pinocchio_model_);
 
     ee_frame_id_ = pinocchio_model_.getFrameId(ee_frame_name);
     if (ee_frame_id_ == static_cast<pinocchio::FrameIndex>(pinocchio_model_.nframes)) {
@@ -66,9 +69,37 @@ ImpedanceLaw::ImpedanceLaw(
       }
     }
 
+    // q packing and the torque-clamp bitmask assume one configuration
+    // coordinate per DOF, true for a revolute chain; assert rather than
+    // misindex silently if a free/planar joint ever appears.
+    if (pinocchio_model_.nq != pinocchio_model_.nv) {
+      throw std::runtime_error("This controller assumes one coordinate per DOF (all revolute joints)");
+    }
+    if (pinocchio_model_.nv > 32) {
+      throw std::runtime_error("More than 32 DOF: the torque-clamp bitmask would overflow");
+    }
+
+    // Joint position limits come straight from the URDF.
+    q_lower_ = pinocchio_model_.lowerPositionLimit;
+    q_upper_ = pinocchio_model_.upperPositionLimit;
+
     if (torque_limits_.size() != static_cast<size_t>(pinocchio_model_.nv)) {
       throw std::runtime_error("joint_torque_limits must have " +
                                std::to_string(pinocchio_model_.nv) + " elements");
+    }
+    if (cartesian_wrench_limits_.size() != 6) {
+      throw std::runtime_error("cartesian_wrench_limits must have exactly 6 elements "
+                               "[fx fy fz mx my mz]");
+    }
+    for (double t : torque_limits_) {
+      if (!std::isfinite(t) || t <= 0.0) {
+        throw std::invalid_argument("joint_torque_limits must be finite and positive");
+      }
+    }
+    for (double t : cartesian_wrench_limits_) {
+      if (!std::isfinite(t) || t <= 0.0) {
+        throw std::invalid_argument("cartesian_wrench_limits must be finite and positive");
+      }
     }
 
     const int nv = pinocchio_model_.nv;
@@ -141,6 +172,17 @@ void ImpedanceLaw::setNullspaceDamping(const std::vector<double>& d_null) {
   d_null_ = checkNv(d_null, "d_nullspace");
 }
 
+// FK for goal validation (non-RT)
+
+Eigen::Vector3d ImpedanceLaw::tcpPosition(const Eigen::VectorXd& q) const {
+  if (q.size() != pinocchio_model_.nq) {
+    throw std::invalid_argument("tcpPosition: q has the wrong size");
+  }
+  pinocchio::forwardKinematics(pinocchio_model_, validation_data_, q);
+  pinocchio::updateFramePlacements(pinocchio_model_, validation_data_);
+  return validation_data_.oMf[ee_frame_id_].translation();
+}
+
 // Control law
 
 Eigen::VectorXd ImpedanceLaw::computeControl(
@@ -178,9 +220,11 @@ Eigen::VectorXd ImpedanceLaw::computeControl(
   q_err_  = q  - q_ref;
   dq_err_ = dq - dq_ref;
 
-  // Task term. 
-  tau_.noalias()  = -(J_.transpose() * (K_cart * (J_ * q_err_)));
-  tau_.noalias() -=  (J_.transpose() * (D_cart * (J_ * dq_err_)));
+  // Task term
+  Vector6d F = -(K_cart * (J_ * q_err_)) - (D_cart * (J_ * dq_err_));
+  wrench_clamp_mask_ = clamp(F, cartesian_wrench_limits_);
+
+  tau_.noalias() = J_.transpose() * F;
 
   // Null-space term. 
   const Matrix6d JJt = J_ * J_.transpose() +
@@ -199,25 +243,24 @@ Eigen::VectorXd ImpedanceLaw::computeControl(
     tau_ += pinocchio::rnea(pinocchio_model_, pinocchio_data_, q, zero, zero);
   }
 
-  clamp(tau_, torque_limits_, "joint torque limits");
+  torque_clamp_mask_ = clamp(tau_, torque_limits_);
   return tau_;
 }
 
-void ImpedanceLaw::clamp(Eigen::Ref<Eigen::VectorXd> v,
-                                const std::vector<double>& limits,
-                                const std::string& context) {
+std::uint32_t ImpedanceLaw::clamp(Eigen::Ref<Eigen::VectorXd> v,
+                                  const std::vector<double>& limits) {
+  std::uint32_t mask = 0;
   for (size_t i = 0; i < limits.size(); ++i) {
     const auto idx = static_cast<Eigen::Index>(i);
     if (v(idx) < -limits[i]) {
-      std::cerr << "[ImpedanceLaw] Clamping " << context << " [" << i
-                << "] to lower limit " << -limits[i] << "\n";
       v(idx) = -limits[i];
+      mask |= (1u << i);
     } else if (v(idx) > limits[i]) {
-      std::cerr << "[ImpedanceLaw] Clamping " << context << " [" << i
-                << "] to upper limit " << limits[i] << "\n";
       v(idx) = limits[i];
+      mask |= (1u << i);
     }
   }
+  return mask;
 }
 
 }  // namespace openarm_impedance_controller
