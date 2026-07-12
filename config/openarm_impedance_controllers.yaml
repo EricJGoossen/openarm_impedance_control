@@ -18,6 +18,18 @@ controller_manager:
       type: position_controllers/GripperActionController
 
 
+# ---------------------------------------------------------------------------
+# Direct-torque impedance. The motors run with kp = kd = 0 (see zero_motor_pd);
+#
+# COMMISSIONING ORDER (do not skip):
+#   1. k_cartesian = 0, k_nullspace = 0  -> arm floats on gravity comp alone.
+#   2. Raise k_nullspace until the elbow holds posture. Joint-space, intuitive.
+#   3. Raise k_cartesian translational: 10 -> 25 -> 50 -> ... N/m.
+#   4. Raise k_cartesian rotational separately: 0.5 -> 1 -> 2 N*m/rad.
+#   5. Damping ~ 2*sqrt(K * M_eff), or raise until oscillation stops.
+# joint_torque_limits is the hard backstop the whole way through.
+# ---------------------------------------------------------------------------
+
 left_impedance_controller:
   ros__parameters:
     joints:
@@ -29,14 +41,34 @@ left_impedance_controller:
       - openarm_left_joint6
       - openarm_left_joint7
     ee_frame_name: openarm_left_hand_tcp
-    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    do_gravity_compensation: true
+    zero_motor_pd: true
+
+    # "world" = fixed base axes. "tcp" = axes rotate with the tool
+    compliance_frame: world
+
+    # Absolute Cartesian impedance [x y z rx ry rz].
+    # Translational: N/m. Rotational: N*m/rad (note the very different scale).
+    k_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    d_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # Axial compliance selector, [0, 1] per axis. 1 = full stiffness,
+    # 0 = free. Example (compliant along the tool z axis, stiff elsewhere):
+    #   k_cartesian_scale: [1.0, 1.0, 0.0, 1.0, 1.0, 1.0]
+    k_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    d_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    # Null-space posture hold (N*m/rad, N*m*s/rad). 
+    k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     # Per-joint torque clamp (Nm) — rated torques by motor:
     #   joints 1-2: DM-J8009P (~45 Nm rated)
     #   joint  3:   DM-J4340P (~25 Nm rated)
     #   joint  4:   DM-J4340  (~20 Nm rated)
     #   joints 5-7: DM-J4310  (~10 Nm rated)
+    # HALVE THESE for first bring-up of the direct-torque loop.
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 
@@ -51,14 +83,19 @@ right_impedance_controller:
       - openarm_right_joint6
       - openarm_right_joint7
     ee_frame_name: openarm_right_hand_tcp
-    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
-    # Per-joint torque clamp (Nm) — rated torques by motor:
-    #   joints 1-2: DM-J8009P (~45 Nm rated)
-    #   joint  3:   DM-J4340P (~25 Nm rated)
-    #   joint  4:   DM-J4340  (~20 Nm rated)
-    #   joints 5-7: DM-J4310  (~10 Nm rated)
+    do_gravity_compensation: true
+    zero_motor_pd: true
+    compliance_frame: world
+
+    k_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    d_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    k_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    d_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 

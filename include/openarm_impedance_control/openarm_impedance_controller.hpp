@@ -1,7 +1,9 @@
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -11,11 +13,12 @@
 #include "realtime_tools/realtime_buffer.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/node_interfaces/node_parameters_interface.hpp"
-#include "control_msgs/control_msgs/action/follow_joint_trajectory.hpp"
+#include "control_msgs/action/follow_joint_trajectory.hpp"
+#include "trajectory_msgs/msg/joint_trajectory.hpp"
 #include "eigen3/Eigen/Core"
 #include "eigen3/Eigen/Geometry"
 
-#include "openarm_impedance_control/cartesian_correction.hpp"
+#include "openarm_impedance_control/impedance_law.hpp"
 
 namespace openarm_impedance_controller {
 
@@ -26,9 +29,9 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Lifecycle
   controller_interface::CallbackReturn on_init() override;
+  controller_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
   controller_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
   controller_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
-  controller_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
 
   // RT control loop
   controller_interface::return_type update(
@@ -43,36 +46,40 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   using GoalHandle = rclcpp_action::ServerGoalHandle<FollowJointTrajectoryAction>;
   using JointTrajectory = trajectory_msgs::msg::JointTrajectory;
 
-  // Configuration 
+  // Configuration
   std::vector<std::string> joint_names_;
-  std::optional<CartesianCorrection> correction_controller_;
+  std::optional<ImpedanceLaw> impedance_law_;
 
-  // Trajectory tracking 
+  // When true the position and velocity command interfaces are written with the *measured* state, 
+  // so the motors' MIT-mode PD sees zero error and contributes zero torque no
+  // matter what kp/kd it was configured with.
+  bool zero_motor_pd_{true};
+
+  // Trajectory tracking
   realtime_tools::RealtimeBuffer<std::shared_ptr<JointTrajectory>> trajectory_buffer_;
   rclcpp::Time trajectory_start_time_;
 
-  // Current Cartesian reference 
+  // Current joint reference (the posture the null-space term holds)
   Eigen::VectorXd q_ref_;
   Eigen::VectorXd dq_ref_;
-  Eigen::VectorXd q_start_;
 
-  // Action server 
+  // Action server
   rclcpp_action::Server<FollowJointTrajectoryAction>::SharedPtr action_server_;
 
   mutable std::mutex goal_mutex_;
   std::shared_ptr<GoalHandle> active_goal_;  // guarded by goal_mutex_
 
-  // Feedback 
+  // Feedback
   std::shared_ptr<FollowJointTrajectoryAction::Feedback> feedback_msg_;
   size_t feedback_count_{0};
-  static constexpr size_t kFeedbackStride = 6;  
+  static constexpr size_t kFeedbackStride = 6;
 
-  // Parameter callback 
+  // Parameter callback
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+  mutable std::mutex gain_mutex_;  // guards runtime gain writes into the model
 
-  // Helpers 
-  void interpolateTrajectory(
-      const JointTrajectory& traj, const rclcpp::Time& time);
+  // Helpers
+  void interpolateTrajectory(const JointTrajectory& traj, const rclcpp::Time& time);
   void updateFeedback(const Eigen::VectorXd& q, const Eigen::VectorXd& dq);
 
   rcl_interfaces::msg::SetParametersResult onParameterChange(
@@ -88,4 +95,4 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   void onGoalAccepted(std::shared_ptr<GoalHandle> goal_handle);
 };
 
-}  // namespace openarm_cartesian_control
+}  // namespace openarm_impedance_controller
