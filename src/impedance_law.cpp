@@ -82,6 +82,7 @@ ImpedanceLaw::ImpedanceLaw(
     // Joint position limits come straight from the URDF.
     q_lower_ = pinocchio_model_.lowerPositionLimit;
     q_upper_ = pinocchio_model_.upperPositionLimit;
+    dq_limit_ = pinocchio_model_.velocityLimit;
 
     if (torque_limits_.size() != static_cast<size_t>(pinocchio_model_.nv)) {
       throw std::runtime_error("joint_torque_limits must have " +

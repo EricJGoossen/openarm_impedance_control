@@ -52,17 +52,22 @@ class ImpedanceLaw {
   // Continuous joints report +/-inf, so bounds checks on them pass vacuously.
   const Eigen::VectorXd& jointLowerLimits() const { return q_lower_; }
   const Eigen::VectorXd& jointUpperLimits() const { return q_upper_; }
+  const Eigen::VectorXd& jointVelocityLimits() const { return dq_limit_; }
 
   // FK for validating goals off the control thread. 
   Eigen::Vector3d tcpPosition(const Eigen::VectorXd& q) const;
-
-  std::uint32_t torqueClampMask() const { return torque_clamp_mask_; }
-  std::uint32_t wrenchClampMask() const { return wrench_clamp_mask_; }
 
   // the TCP for the q just passed in.
   Eigen::Vector3d lastTcpPosition() const {
     return pinocchio_data_.oMf[ee_frame_id_].translation();
   }
+
+  Eigen::Vector3d lastTcpLinearVelocity(const Eigen::VectorXd& dq) const {
+    return (J_ * dq).head<3>();
+  }
+
+  std::uint32_t torqueClampMask() const { return torque_clamp_mask_; }
+  std::uint32_t wrenchClampMask() const { return wrench_clamp_mask_; }
 
  private:
   using Vector6d = Eigen::Matrix<double, 6, 1>;
@@ -72,7 +77,8 @@ class ImpedanceLaw {
   const std::vector<double> torque_limits_;             // size nv, Nm
   const std::vector<double> cartesian_wrench_limits_;   // size 6, N / Nm
   Eigen::VectorXd q_lower_;   // joint position limits, from the URDF
-  Eigen::VectorXd q_upper_;
+  Eigen::VectorXd q_upper_;   // joint position limits, from the URDF
+  Eigen::VectorXd dq_limit_;  // joint velocity limits, from the URDF
 
   // Control flags
   bool do_gravity_compensation_;
