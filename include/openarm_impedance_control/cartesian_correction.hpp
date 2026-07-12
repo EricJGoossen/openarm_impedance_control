@@ -9,7 +9,7 @@
 #include "pinocchio/multibody/model.hpp"
 #include "pinocchio/multibody/data.hpp"
 
-namespace openarm_impedance_control {
+namespace openarm_impedance_controller {
 
 class CartesianCorrection {
  public:
@@ -44,8 +44,8 @@ class CartesianCorrection {
   pinocchio::FrameIndex ee_frame_id_;
 
   // Impedance gains
-  Eigen::Matrix<double, 6, 6> K_joint_;
-  Eigen::Matrix<double, 6, 6> D_joint_;
+  Eigen::MatrixXd K_joint_;
+  Eigen::MatrixXd D_joint_;
   Eigen::Matrix<double, 6, 6> relax_K_; // Cartesian stiffness gain
   Eigen::Matrix<double, 6, 6> relax_D_; // Cartesian damping gain
   constexpr static double kEpsilon = 1.0;

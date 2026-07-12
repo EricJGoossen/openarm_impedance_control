@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
-<library path="openarm_impedance">
+<library path="openarm_impedance_controller">
   <class
-    name="openarm_impedance_control/OpenArmImpedanceController"
-    type="openarm_impedance_control::OpenArmImpedanceController"
+    name="openarm_impedance_controller/OpenArmImpedanceController"
+    type="openarm_impedance_controller::OpenArmImpedanceController"
     base_class_type="controller_interface::ControllerInterface">
     <description>Joint-space impedance controller for OpenArm</description>
   </class>

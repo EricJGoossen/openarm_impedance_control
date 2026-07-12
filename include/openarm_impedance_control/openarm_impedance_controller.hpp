@@ -17,7 +17,7 @@
 
 #include "openarm_impedance_control/cartesian_correction.hpp"
 
-namespace openarm_impedance_control {
+namespace openarm_impedance_controller {
 
 class OpenArmImpedanceController : public controller_interface::ControllerInterface {
  public:

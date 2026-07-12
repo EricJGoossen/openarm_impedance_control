@@ -16,6 +16,11 @@ XACRO_PATH = os.path.join(
 
 LAUNCH_DELAY_SECONDS = 1.0
 
+
+class NoAliasDumper(yaml.SafeDumper):
+    def ignore_aliases(self, data):
+        return True
+
 # Order in which generic joint-gains keys map onto the 7 arm DOF.
 ARM_JOINT_GAIN_KEYS = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"]
 
@@ -28,6 +33,11 @@ def load_joint_gains(gains_file_path: str) -> dict:
 
 
 def build_gain_arrays(gains: dict) -> tuple[list, list]:
+    """
+    Extract kp/kd values from the generic gains dict, in ARM_JOINT_GAIN_KEYS order,
+    producing the flat arrays the controller's k_joint_gains/d_joint_gains
+    parameters expect.
+    """
     k_gains, d_gains = [], []
     for key in ARM_JOINT_GAIN_KEYS:
         if key not in gains:
@@ -41,6 +51,12 @@ def build_gain_arrays(gains: dict) -> tuple[list, list]:
 
 
 def write_gains_overlay(context: LaunchContext, gains_file: str, tmp_dir: str) -> str:
+    """
+    Reads the generic gains YAML once, builds k_joint_gains/d_joint_gains
+    (identical for both arms, since both arms share the same joint gain
+    profile), and writes a single overlay YAML with a ros__parameters block
+    for each impedance controller. Returns the path to that overlay file.
+    """
     gains_file_resolved = context.perform_substitution(gains_file)
     gains = load_joint_gains(gains_file_resolved)
     k_gains, d_gains = build_gain_arrays(gains)
@@ -48,14 +64,14 @@ def write_gains_overlay(context: LaunchContext, gains_file: str, tmp_dir: str) -
     overlay = {
         "left_impedance_controller": {
             "ros__parameters": {
-                "k_joint_gains": k_gains,
-                "d_joint_gains": d_gains,
+                "k_joint_gains": list(k_gains),
+                "d_joint_gains": list(d_gains),
             }
         },
         "right_impedance_controller": {
             "ros__parameters": {
-                "k_joint_gains": k_gains,
-                "d_joint_gains": d_gains,
+                "k_joint_gains": list(k_gains),
+                "d_joint_gains": list(d_gains),
             }
         },
     }
@@ -63,7 +79,7 @@ def write_gains_overlay(context: LaunchContext, gains_file: str, tmp_dir: str) -
     overlay_path = os.path.join(tmp_dir, "generated_joint_gains_overlay.yaml")
     os.makedirs(tmp_dir, exist_ok=True)
     with open(overlay_path, "w") as f:
-        yaml.safe_dump(overlay, f)
+        yaml.dump(overlay, f, Dumper=NoAliasDumper)
 
     return overlay_path
 
@@ -126,6 +142,12 @@ def spawner(arguments: list, param_file: str = None) -> Node:
 
 
 def launch_impedance_spawner(context: LaunchContext, gains_file):
+    """
+    OpaqueFunction body: builds the gains overlay file at launch time (since
+    it depends on reading + reshaping a YAML file, which can't be expressed
+    as a pure launch substitution), then returns the impedance-controller
+    spawner with that overlay attached.
+    """
     tmp_dir = os.path.join(os.path.expanduser("~"), ".ros", "generated_params")
     overlay_path = write_gains_overlay(context, gains_file, tmp_dir)
 
@@ -156,9 +178,14 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "joint_gains_file",
-            default_value="joint_gains.yaml",
+            default_value="control_gains.yaml",
             description=(
-                "Per-joint kp/kd gains file name."
+                "Per-joint kp/kd gains file name, in the joint1..joint7/hand "
+                "format. Looked up in "
+                "openarm_description/assets/robot/openarm_v1.0/config/arm/ "
+                "-- NOT this package's own config/ directory. Converted at "
+                "launch time into k_joint_gains/d_joint_gains arrays for both "
+                "arm controllers."
             ),
         ),
     ]
@@ -166,13 +193,13 @@ def generate_launch_description():
     right_can_interface = LaunchConfiguration("right_can_interface")
     left_can_interface  = LaunchConfiguration("left_can_interface")
     controllers_file    = PathJoinSubstitution([
-        FindPackageShare("openarm_impedance_control"),
+        FindPackageShare("openarm_impedance_controller"),
         "config",
         LaunchConfiguration("controllers_file"),
     ])
     joint_gains_file    = PathJoinSubstitution([
-        FindPackageShare("openarm_impedance_control"),
-        "config",
+        FindPackageShare("openarm_description"),
+        "assets", "robot", "openarm_v1.0", "config", "arm",
         LaunchConfiguration("joint_gains_file"),
     ])
 
@@ -231,3 +258,5 @@ def generate_launch_description():
             spawner(["left_gripper_controller", "right_gripper_controller"]),
         ]),
     ])
+
+

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(openarm_impedance)
+project(openarm_impedance_controller)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -20,17 +20,17 @@ find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 
-add_library(openarm_impedance SHARED
-  src/impedance.cpp
+add_library(openarm_impedance_controller SHARED
+  src/cartesian_correction.cpp
   src/openarm_impedance_controller.cpp
 )
 
-target_include_directories(openarm_impedance PUBLIC
+target_include_directories(openarm_impedance_controller PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(openarm_impedance
+ament_target_dependencies(openarm_impedance_controller
   rclcpp
   rclcpp_action
   controller_interface
@@ -45,13 +45,13 @@ ament_target_dependencies(openarm_impedance
   realtime_tools
 )
 
-target_link_libraries(openarm_impedance
+target_link_libraries(openarm_impedance_controller
   pinocchio::pinocchio
 )
 
 pluginlib_export_plugin_description_file(controller_interface openarm_impedance_plugins.xml)
 
-install(TARGETS openarm_impedance
+install(TARGETS openarm_impedance_controller
   EXPORT export_openarm_impedance
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

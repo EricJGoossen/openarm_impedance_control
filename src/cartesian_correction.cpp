@@ -9,7 +9,7 @@
 #include <iostream>
 #include <cmath>
 
-namespace openarm_impedance_control {
+namespace openarm_impedance_controller {
 
 CartesianCorrection::CartesianCorrection(
     const std::string& urdf_string,

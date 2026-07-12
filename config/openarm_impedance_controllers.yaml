@@ -6,10 +6,10 @@ controller_manager:
       type: joint_state_broadcaster/JointStateBroadcaster
 
     left_impedance_controller:
-      type: openarm_impedance_control/OpenArmImpedanceController
+      type: openarm_impedance_controller/OpenArmImpedanceController
 
     right_impedance_controller:
-      type: openarm_impedance_control/OpenArmImpedanceController
+      type: openarm_impedance_controller/OpenArmImpedanceController
 
     left_gripper_controller:
       type: position_controllers/GripperActionController
@@ -29,7 +29,7 @@ left_impedance_controller:
       - openarm_left_joint6
       - openarm_left_joint7
     ee_frame_name: openarm_left_hand_tcp
-    k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    k_cartesian_gains: [0.5, 1.0, 1.0, 1.0, 1.0, 1.0]
     d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
     # Per-joint torque clamp (Nm) — rated torques by motor:
@@ -54,7 +54,6 @@ right_impedance_controller:
     k_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     d_cartesian_gains: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
-    
     # Per-joint torque clamp (Nm) — rated torques by motor:
     #   joints 1-2: DM-J8009P (~45 Nm rated)
     #   joint  3:   DM-J4340P (~25 Nm rated)

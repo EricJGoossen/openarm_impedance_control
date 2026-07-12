@@ -1,0 +1,12 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/openarm_ws/install/rosbag_recorder/lib/python3.12/site-packages",
+        "/openarm_ws/install/cartesian_control_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/openarm_ws/install/rosbag_recorder/lib/python3.12/site-packages",
+        "/openarm_ws/install/cartesian_control_msgs/lib/python3.12/site-packages",
+        "/opt/ros/jazzy/lib/python3.12/site-packages"
+    ]
+}

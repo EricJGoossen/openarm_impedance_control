@@ -2,7 +2,7 @@
 
 #include "pluginlib/class_list_macros.hpp"
 
-namespace openarm_impedance_control {
+namespace openarm_impedance_controller {
 
 // Lifecycle
 
@@ -388,5 +388,5 @@ OpenArmImpedanceController::onParameterChange(const std::vector<rclcpp::Paramete
 }  // namespace openarm_impedance_control
 
 PLUGINLIB_EXPORT_CLASS(
-  openarm_impedance_control::OpenArmImpedanceController,
+  openarm_impedance_controller::OpenArmImpedanceController,
   controller_interface::ControllerInterface)
