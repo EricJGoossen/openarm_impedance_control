@@ -64,14 +64,24 @@ CartesianCorrection::CartesianCorrection(
   }
 }
 
+void CartesianCorrection::applyRelaxGains(const std::vector<double>& gains,
+                                           const char* label,
+                                           Eigen::Matrix<double, 6, 6>& relax) {
+  if (gains.size() != 6) {
+    throw std::invalid_argument(std::string(label) + " must have exactly 6 elements");
+  }
+  Eigen::Matrix<double, 6, 1> g = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(gains.data());
+  clamp(g, 0.0, 1.0, label);
+  relax.setIdentity();
+  relax.diagonal() -= g;
+}
+
 void CartesianCorrection::setStiffness(const std::vector<double>& k_gains) {
-  relax_K_.setIdentity();
-  relax_K_.diagonal() -= Eigen::Map<const Eigen::Matrix<double, 6, 1>>(k_gains.data());
+  applyRelaxGains(k_gains, "stiffness gains", relax_K_);
 }
 
 void CartesianCorrection::setDamping(const std::vector<double>& d_gains) {
-  relax_D_.setIdentity();
-  relax_D_.diagonal() -= Eigen::Map<const Eigen::Matrix<double, 6, 1>>(d_gains.data());
+  applyRelaxGains(d_gains, "damping gains", relax_D_);
 }
 
 Eigen::VectorXd CartesianCorrection::computeControl(
@@ -105,18 +115,30 @@ Eigen::VectorXd CartesianCorrection::computeControl(
     tau += pinocchio::rnea(pinocchio_model_, pinocchio_data_, q, zero, zero);
   }
 
-  clamp(tau, torque_limits_);
+  clamp(tau, torque_limits_, "joint torque limits");
 
   return tau;
 }
 
-void CartesianCorrection::clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits) {
+void CartesianCorrection::clamp(Eigen::Ref<Eigen::VectorXd> v, double lower_limit, double upper_limit, const std::string& context) {
+  for (int i = 0; i < v.size(); ++i) {
+    if (v(i) < lower_limit) {
+      std::cerr << "[CartesianCorrection] Clamping " << context << " [" << i << "] to lower limit " << lower_limit << "\n";
+      v(i) = lower_limit;
+    } else if (v(i) > upper_limit) {
+      std::cerr << "[CartesianCorrection] Clamping " << context << " [" << i << "] to upper limit " << upper_limit << "\n";
+      v(i) = upper_limit;
+    }
+  }
+}
+
+void CartesianCorrection::clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits, const std::string& context) {
   for (size_t i = 0; i < limits.size(); ++i) {
     if (v(i) < -limits[i]) {
-      std::cerr << "[CartesianCorrection] Clamping [" << i << "] to lower limit " << -limits[i] << "\n";
+      std::cerr << "[CartesianCorrection] Clamping " << context << " [" << i << "] to lower limit " << -limits[i] << "\n";
       v(i) = -limits[i];
     } else if (v(i) > limits[i]) {
-      std::cerr << "[CartesianCorrection] Clamping [" << i << "] to upper limit " << limits[i] << "\n";
+      std::cerr << "[CartesianCorrection] Clamping " << context << " [" << i << "] to upper limit " << limits[i] << "\n";
       v(i) = limits[i];
     }
   }

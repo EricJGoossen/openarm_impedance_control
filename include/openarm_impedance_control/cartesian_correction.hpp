@@ -51,7 +51,9 @@ class CartesianCorrection {
   constexpr static double kEpsilon = 1.0;
 
   // Helper functions
-  void clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits);
+  void applyRelaxGains(const std::vector<double>& gains, const char* label, Eigen::Matrix<double, 6, 6>& relax);
+  void clamp(Eigen::Ref<Eigen::VectorXd> v, double lower_limit, double upper_limit, const std::string& context);
+  void clamp(Eigen::Ref<Eigen::VectorXd> v, const std::vector<double>& limits, const std::string& context);
 
 };
 
