@@ -17,20 +17,6 @@ controller_manager:
     right_gripper_controller:
       type: position_controllers/GripperActionController
 
-
-# ---------------------------------------------------------------------------
-# Direct-torque impedance. The motors run with kp = kd = 0 (see zero_motor_pd);
-#
-# COMMISSIONING ORDER (do not skip):
-#   1. k_cartesian = 0, k_nullspace = 0  -> arm floats on gravity comp alone.
-#   2. Raise k_nullspace until the elbow holds posture. Joint-space, intuitive.
-#   3. Raise k_cartesian translational: 10 -> 25 -> 50 -> ... N/m.
-#   4. Raise k_cartesian rotational separately: 0.5 -> 1 -> 2 N*m/rad.
-#   5. Damping ~ 2*sqrt(K * M_eff), or raise until oscillation stops.
-# joint_torque_limits and cartesian_wrench_limits are the hard backstops the
-# whole way through.
-# ---------------------------------------------------------------------------
-
 left_impedance_controller:
   ros__parameters:
     joints:
@@ -44,46 +30,30 @@ left_impedance_controller:
     ee_frame_name: openarm_left_hand_tcp
 
     do_gravity_compensation: true
-    zero_motor_pd: true
 
-    # "world" = fixed base axes. "tcp" = axes rotate with the tool
-    compliance_frame: world
-
-    # Absolute Cartesian impedance [x y z rx ry rz].
-    # Translational: N/m. Rotational: N*m/rad (note the very different scale).
-    k_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    d_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
-    # Axial compliance selector, [0, 1] per axis. 1 = full stiffness,
-    # 0 = free. Example (compliant along the tool z axis, stiff elsewhere):
-    #   k_cartesian_scale: [1.0, 1.0, 0.0, 1.0, 1.0, 1.0]
-    k_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    d_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-
-    # Null-space posture hold (N*m/rad, N*m*s/rad). 
-    k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # Fallback only 
+    motor_gains_file: "../openarm_description/assets/robot/openarm_v1.0/config/arm/control_gains.yaml"
 
     # TCP workspace box (m, base frame). A goal is rejected whole if any
     # waypoint's TCP falls outside. Set both to [] to disable the check.
     cartesian_position_min: [-0.8, -0.8, 0.0]
     cartesian_position_max: [ 0.8,  0.8, 1.2]
 
-    # Joint position limits are read from the URDF -- there is no override here.
-    # This margin (rad) is pulled in from each side when validating goals, so
-    # waypoints must land strictly inside the mechanical range.
+    # Joint position limits are read from the URDF -- there is no override
+    # here. This margin (rad) is pulled in from each side when validating
+    # goals, so waypoints must land strictly inside the mechanical range.
     joint_position_margin: 0.05
 
-    # Hard Cartesian torque limit [fx fy fz mx my mz] (N, N*m). Clamped on the
-    # commanded task wrench every cycle, before J^T. Halve for first bring-up.
-    cartesian_wrench_limits: [40.0, 40.0, 40.0, 10.0, 10.0, 10.0]
+    # Runtime safety trip on TCP speed (m/s). 0 disables it.
+    cartesian_velocity_limit: 0.0
 
-    # Per-joint torque clamp (Nm) — rated torques by motor:
+    # Per-joint torque clamp (Nm) -- rated torques by motor:
     #   joints 1-2: DM-J8009P (~45 Nm rated)
     #   joint  3:   DM-J4340P (~25 Nm rated)
     #   joint  4:   DM-J4340  (~20 Nm rated)
     #   joints 5-7: DM-J4310  (~10 Nm rated)
-    # HALVE THESE for first bring-up of the direct-torque loop 
+    # Used both as the goal-validation limit and the runtime effort backstop.
+    # HALVE THESE for first bring-up of this control scheme.
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
 
@@ -100,22 +70,14 @@ right_impedance_controller:
     ee_frame_name: openarm_right_hand_tcp
 
     do_gravity_compensation: true
-    zero_motor_pd: true
-    compliance_frame: world
 
-    k_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    d_cartesian: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    k_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    d_cartesian_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-
-    k_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    d_nullspace: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    motor_gains_file: "../openarm_description/assets/robot/openarm_v1.0/config/arm/control_gains.yaml"
 
     cartesian_position_min: [-0.8, -0.8, 0.0]
     cartesian_position_max: [ 0.8,  0.8, 1.2]
     joint_position_margin: 0.05
 
-    cartesian_wrench_limits: [40.0, 40.0, 40.0, 10.0, 10.0, 10.0]
+    cartesian_velocity_limit: 0.0
 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 

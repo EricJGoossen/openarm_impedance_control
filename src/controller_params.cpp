@@ -20,15 +20,7 @@ ControllerParams readControllerParams(rclcpp_lifecycle::LifecycleNode& node) {
 
   p.ee_frame_name = node.get_parameter("ee_frame_name").as_string();
 
-  p.joint_torque_limits     = node.get_parameter("joint_torque_limits").as_double_array();
-  p.cartesian_wrench_limits = node.get_parameter("cartesian_wrench_limits").as_double_array();
-
-  p.k_cartesian       = node.get_parameter("k_cartesian").as_double_array();
-  p.d_cartesian       = node.get_parameter("d_cartesian").as_double_array();
-  p.k_cartesian_scale = node.get_parameter("k_cartesian_scale").as_double_array();
-  p.d_cartesian_scale = node.get_parameter("d_cartesian_scale").as_double_array();
-  p.k_nullspace       = node.get_parameter("k_nullspace").as_double_array();
-  p.d_nullspace       = node.get_parameter("d_nullspace").as_double_array();
+  p.joint_torque_limits = node.get_parameter("joint_torque_limits").as_double_array();
 
   p.cartesian_position_min = node.get_parameter("cartesian_position_min").as_double_array();
   p.cartesian_position_max = node.get_parameter("cartesian_position_max").as_double_array();
@@ -40,18 +32,12 @@ ControllerParams readControllerParams(rclcpp_lifecycle::LifecycleNode& node) {
         "cartesian_velocity_limit must be finite and non-negative (0 disables it)");
   }
 
-  const std::string frame_str = node.get_parameter("compliance_frame").as_string();
-  if (frame_str == "world") {
-    p.compliance_frame = ComplianceFrame::kWorld;
-  } else if (frame_str == "tcp") {
-    p.compliance_frame = ComplianceFrame::kTcp;
-  } else {
-    throw std::invalid_argument(
-        "compliance_frame must be 'world' or 'tcp', got '" + frame_str + "'");
-  }
-
   p.do_gravity_compensation = node.get_parameter("do_gravity_compensation").as_bool();
-  p.zero_motor_pd           = node.get_parameter("zero_motor_pd").as_bool();
+
+  p.motor_gains_file = node.get_parameter("motor_gains_file").as_string();
+  if (p.motor_gains_file.empty()) {
+    throw std::invalid_argument("motor_gains_file parameter is empty");
+  }
 
   return p;
 }

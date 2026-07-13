@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,7 +19,7 @@
 #include "eigen3/Eigen/Core"
 #include "eigen3/Eigen/Geometry"
 
-#include "openarm_impedance_control/impedance_law.hpp"
+#include "openarm_impedance_control/robot_model.hpp"
 #include "openarm_impedance_control/goal_limits.hpp"
 
 namespace openarm_impedance_controller {
@@ -28,17 +29,14 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   OpenArmImpedanceController() = default;
   ~OpenArmImpedanceController() = default;
 
-  // Lifecycle
   controller_interface::CallbackReturn on_init() override;
   controller_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
   controller_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
   controller_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
 
-  // RT control loop
   controller_interface::return_type update(
       const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
-  // Hardware interface claims
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
@@ -49,17 +47,14 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Configuration
   std::vector<std::string> joint_names_;
-  std::optional<ImpedanceLaw> impedance_law_;
-
-  // Joint-space and Cartesian position limits
+  std::optional<RobotModel> robot_model_;
   std::optional<GoalLimits> goal_limits_;
 
-  // When true the position and velocity command interfaces are written with the *measured* state, 
-  // so the motors' MIT-mode PD sees zero error and contributes zero torque no
-  // matter what kp/kd it was configured with.
-  bool zero_motor_pd_{true};
+  std::vector<double> joint_torque_limits_;   // backstop clamp on the RT effort command
+  std::atomic<bool> do_gravity_compensation_{true};
 
-  // Runtime velocity trip. 
+  // Runtime velocity trip (unrelated to the old impedance law -- a hard
+  // safety backstop that stays regardless of control scheme).
   double cartesian_velocity_limit_{0.0};
   bool cartesian_velocity_limit_enabled_{false};
 
@@ -67,7 +62,8 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   realtime_tools::RealtimeBuffer<std::shared_ptr<JointTrajectory>> trajectory_buffer_;
   rclcpp::Time trajectory_start_time_;
 
-  // Current joint reference (the posture the null-space term holds)
+  // Current reference: the position/velocity setpoint handed straight to the
+  // motors' onboard PD (position + velocity command interfaces).
   Eigen::VectorXd q_ref_;
   Eigen::VectorXd dq_ref_;
 
@@ -87,24 +83,23 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Parameter callback
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
-  mutable std::mutex gain_mutex_;  // guards runtime gain writes into the model
 
   // Helpers
   void interpolateTrajectory(const JointTrajectory& traj, const rclcpp::Time& time);
   void updateFeedback(const Eigen::VectorXd& q, const Eigen::VectorXd& dq);
 
-  // map[k] = index of joint_names_[k] within goal_names. 
+  // map[k] = index of joint_names_[k] within goal_names.
   std::vector<size_t> buildJointMap(const std::vector<std::string>& goal_names) const;
 
-  // Throttled reporting of the joint torque / Cartesian wrench clamps. 
-  void reportClampWarnings(std::uint32_t torque_clamp_mask, std::uint32_t wrench_clamp_mask);
+  // Clamps the gravity-comp effort to joint_torque_limits_ (a backstop --
+  // goal validation should already prevent this from firing) and logs which
+  // joints, throttled.
+  void clampAndReportEffort(Eigen::VectorXd& tau);
 
   // True if the measured joint velocities or TCP speed exceed their limits.
-  // Logs which one and why. Allocation-free.
   bool checkVelocityTrip(const Eigen::VectorXd& dq, const Eigen::Vector3d& tcp_vel);
 
-  // Logs a hardware_interface set_value() failure. Throttled; does not by
-  // itself stop the controller -- see the call sites for what happens next.
+  // Logs a hardware_interface set_value() failure. Throttled.
   void reportInterfaceWriteFailure(const char* what, size_t joint_idx);
 
   rcl_interfaces::msg::SetParametersResult onParameterChange(

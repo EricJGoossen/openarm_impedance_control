@@ -13,6 +13,11 @@ XACRO_PATH = os.path.join(
     "assets", "robot", "openarm_v1.0", "urdf", "openarm_v10.urdf.xacro"
 )
 
+DEFAULT_MOTOR_GAINS_FILE = os.path.join(
+    get_package_share_directory("openarm_description"),
+    "assets", "robot", "openarm_v1.0", "config", "arm", "control_gains.yaml"
+)
+
 LAUNCH_DELAY_SECONDS = 1.0
 
 
@@ -35,12 +40,23 @@ def generate_robot_description(context: LaunchContext,
 def launch_robot_nodes(context: LaunchContext,
                        right_can_interface,
                        left_can_interface,
-                       controllers_file):
+                       controllers_file,
+                       motor_gains_file):
     robot_description = generate_robot_description(
         context, right_can_interface, left_can_interface)
 
     robot_description_param = {"robot_description": robot_description}
     controllers_file_str = context.perform_substitution(controllers_file)
+    motor_gains_file_str = context.perform_substitution(motor_gains_file)
+
+    motor_gains_overrides = {
+        "left_impedance_controller": {
+            "ros__parameters": {"motor_gains_file": motor_gains_file_str}
+        },
+        "right_impedance_controller": {
+            "ros__parameters": {"motor_gains_file": motor_gains_file_str}
+        },
+    }
 
     robot_state_pub = Node(
         package="robot_state_publisher",
@@ -54,7 +70,7 @@ def launch_robot_nodes(context: LaunchContext,
         package="controller_manager",
         executable="ros2_control_node",
         output="both",
-        parameters=[robot_description_param, controllers_file_str],
+        parameters=[robot_description_param, controllers_file_str, motor_gains_overrides],
     )
 
     return [robot_state_pub, control_node]
@@ -86,6 +102,11 @@ def generate_launch_description():
             default_value="openarm_impedance_controllers.yaml",
             description="Controller config file name (in openarm_impedance_controller/config/).",
         ),
+        DeclareLaunchArgument(
+            "motor_gains_file",
+            default_value=DEFAULT_MOTOR_GAINS_FILE,
+            description="Path to the onboard motor kp/kd YAML (openarm_description's control_gains.yaml).",
+        ),
     ]
 
     right_can_interface = LaunchConfiguration("right_can_interface")
@@ -95,10 +116,11 @@ def generate_launch_description():
         "config",
         LaunchConfiguration("controllers_file"),
     ])
+    motor_gains_file = LaunchConfiguration("motor_gains_file")
 
     robot_nodes = OpaqueFunction(
         function=launch_robot_nodes,
-        args=[right_can_interface, left_can_interface, controllers_file],
+        args=[right_can_interface, left_can_interface, controllers_file, motor_gains_file],
     )
 
     rosbag_recorder = Node(

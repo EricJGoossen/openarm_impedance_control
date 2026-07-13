@@ -19,9 +19,14 @@ find_package(pinocchio REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_library(openarm_impedance_controller SHARED
   src/cartesian_correction.cpp
+  src/robot_model.cpp
+  src/goal_limits.cpp
+  src/controller_params.cpp
+  src/motor_gains.cpp
   src/openarm_impedance_controller.cpp
 )
 
@@ -47,6 +52,7 @@ ament_target_dependencies(openarm_impedance_controller
 
 target_link_libraries(openarm_impedance_controller
   pinocchio::pinocchio
+  yaml-cpp::yaml-cpp
 )
 
 pluginlib_export_plugin_description_file(controller_interface openarm_impedance_plugins.xml)
