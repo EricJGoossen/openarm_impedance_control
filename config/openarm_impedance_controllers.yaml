@@ -31,7 +31,8 @@ left_impedance_controller:
 
     do_gravity_compensation: true
 
-    # Fallback only 
+    # Fallback only -- normally overridden by the motor_gains_file launch
+    # argument in openarm_impedance_control.launch.py.
     motor_gains_file: "../openarm_description/assets/robot/openarm_v1.0/config/arm/control_gains.yaml"
 
     # TCP workspace box (m, base frame). A goal is rejected whole if any
@@ -55,6 +56,9 @@ left_impedance_controller:
     # Used both as the goal-validation limit and the runtime effort backstop.
     # HALVE THESE for first bring-up of this control scheme.
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
+
+    # Estimated Cartesian wrench trip [fx fy fz mx my mz] (N, N*m)
+    cartesian_wrench_limits: []
 
 
 right_impedance_controller:
@@ -80,6 +84,8 @@ right_impedance_controller:
     cartesian_velocity_limit: 0.0
 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
+
+    cartesian_wrench_limits: []
 
 
 left_gripper_controller:
