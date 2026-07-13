@@ -16,6 +16,7 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
   auto_declare<std::string>("robot_description", "");
   auto_declare<std::string>("ee_frame_name", "tool0");
   auto_declare<std::vector<double>>("joint_torque_limits", std::vector<double>(7, 1.0));
+  auto_declare<std::vector<double>>("cartesian_wrench_limits", std::vector<double>{});
   auto_declare<std::vector<double>>("cartesian_position_min", std::vector<double>{});
   auto_declare<std::vector<double>>("cartesian_position_max", std::vector<double>{});
   auto_declare<double>("joint_position_margin", 0.0);
@@ -47,6 +48,28 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
       RCLCPP_ERROR(get_node()->get_logger(), "joint_torque_limits must be finite and positive");
       return CallbackReturn::ERROR;
     }
+  }
+
+  cartesian_wrench_limits_ = params.cartesian_wrench_limits;
+  cartesian_wrench_limit_enabled_ = !cartesian_wrench_limits_.empty();
+  if (cartesian_wrench_limit_enabled_) {
+    if (cartesian_wrench_limits_.size() != 6) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+        "cartesian_wrench_limits must have exactly 6 elements [fx fy fz mx my mz], or be "
+        "empty to disable the check");
+      return CallbackReturn::ERROR;
+    }
+    for (double w : cartesian_wrench_limits_) {
+      if (!std::isfinite(w) || w <= 0.0) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+          "cartesian_wrench_limits must be finite and positive");
+        return CallbackReturn::ERROR;
+      }
+    }
+  } else {
+    RCLCPP_WARN(get_node()->get_logger(),
+      "No cartesian_wrench_limits configured -- Cartesian force/torque will not be checked "
+      "(only joint torque, via the estimate derived from onboard tracking error).");
   }
 
   try {
@@ -195,13 +218,7 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_deactivate(
     }
   }
 
-  // Command the measured position, zero velocity, zero effort. NOTE: because
-  // the motors' onboard PD is now always engaged (that's the point of this
-  // rewrite), this does NOT make the arm go limp the way the old
-  // zero_motor_pd design did -- the motor will still hold this position with
-  // its own kp/kd from control_gains.yaml. A true gravity-only release on
-  // deactivate would have to happen in the hardware interface (a torque-mode
-  // -only command), which is outside this controller's reach.
+  // Command the measured position, zero velocity, zero effort.
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     const double pos = state_interfaces_[i * 2].get_value();
     if (!command_interfaces_[i * 3].set_value(pos)) {
@@ -317,19 +334,24 @@ controller_interface::return_type OpenArmImpedanceController::update(
   const Eigen::Vector3d tcp     = robot_model_->lastTcpPositionRT();
   const Eigen::Vector3d tcp_vel = (J * dq).head<3>();
 
+  const Eigen::VectorXd tau_est = estimateJointTorque(q, dq, tau);
+
   if (checkVelocityTrip(dq, tcp_vel)) {
     freezeAndAbortGoal(q, "Velocity limit exceeded; goal aborted", -2);
     return controller_interface::return_type::OK;
   }
 
-  if (checkTorqueTrip(q, dq, tau)) {
+  if (checkTorqueTrip(tau_est)) {
     freezeAndAbortGoal(q, "Torque limit exceeded; goal aborted", -3);
     return controller_interface::return_type::OK;
   }
 
+  if (checkCartesianWrenchTrip(J, tau_est)) {
+    freezeAndAbortGoal(q, "Cartesian wrench limit exceeded; goal aborted", -4);
+    return controller_interface::return_type::OK;
+  }
+
   // Hand the interpolated reference straight to the motors' onboard PD.
-  // Effort is gravity-comp feedforward only -- no active stiffness/damping
-  // term is added here any more.
   for (size_t i = 0; i < n; ++i) {
     if (!command_interfaces_[i * 3].set_value(q_ref_[i])) {
       reportInterfaceWriteFailure("position", i);
@@ -391,11 +413,7 @@ controller_interface::return_type OpenArmImpedanceController::update(
   return controller_interface::return_type::OK;
 }
 
-// Effort backstop. Should essentially never fire if goal validation is
-// doing its job -- gravity comp alone rarely approaches joint_torque_limits
-// -- but it's cheap insurance against a bad URDF mass/inertia or a
-// mis-scaled limit.
-
+// Effort backstop. 
 void OpenArmImpedanceController::clampAndReportEffort(Eigen::VectorXd& tau) {
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     const auto idx = static_cast<Eigen::Index>(i);
@@ -451,25 +469,59 @@ bool OpenArmImpedanceController::checkVelocityTrip(
   return false;
 }
 
-// Torque trip. 
-bool OpenArmImpedanceController::checkTorqueTrip(
+Eigen::VectorXd OpenArmImpedanceController::estimateJointTorque(
     const Eigen::VectorXd& q, const Eigen::VectorXd& dq,
-    const Eigen::VectorXd& tau_gravity_effort) {
-  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const Eigen::VectorXd& tau_gravity_effort) const {
+  const size_t n = joint_names_.size();
+  Eigen::VectorXd tau_est(n);
+  for (size_t i = 0; i < n; ++i) {
     const auto idx = static_cast<Eigen::Index>(i);
     const double pos_err = q_ref_[idx] - q[idx];
     const double vel_err = dq_ref_[idx] - dq[idx];
-    const double tau_est = motor_kp_[i] * pos_err + motor_kd_[i] * vel_err
-                          + tau_gravity_effort[idx];
-    if (std::abs(tau_est) > joint_torque_limits_[i]) {
+    tau_est[idx] = motor_kp_[i] * pos_err + motor_kd_[i] * vel_err + tau_gravity_effort[idx];
+  }
+  return tau_est;
+}
+
+bool OpenArmImpedanceController::checkTorqueTrip(const Eigen::VectorXd& tau_est) {
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const auto idx = static_cast<Eigen::Index>(i);
+    if (std::abs(tau_est[idx]) > joint_torque_limits_[i]) {
       RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
         kLimitWarnPeriodMs,
         "Torque trip: joint '%s' estimated onboard-PD + gravity torque is "
-        "%.2f Nm (kp=%.1f * %.4f rad err + kd=%.2f * %.3f rad/s err + "
-        "gravity %.2f Nm), exceeding joint_torque_limits of %.2f Nm. "
-        "Freezing and aborting the active goal.",
-        joint_names_[i].c_str(), tau_est, motor_kp_[i], pos_err,
-        motor_kd_[i], vel_err, tau_gravity_effort[idx], joint_torque_limits_[i]);
+        "%.2f Nm, exceeding joint_torque_limits of %.2f Nm. Freezing and "
+        "aborting the active goal.",
+        joint_names_[i].c_str(), tau_est[idx], joint_torque_limits_[i]);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool OpenArmImpedanceController::checkCartesianWrenchTrip(
+    const Eigen::Matrix<double, 6, Eigen::Dynamic>& J, const Eigen::VectorXd& tau_est) {
+  if (!cartesian_wrench_limit_enabled_) {
+    return false;
+  }
+  static constexpr const char* kWrenchName[6] = {"fx", "fy", "fz", "mx", "my", "mz"};
+  static constexpr double kLambda  = 0.05;
+  static constexpr double kLambda2 = kLambda * kLambda;
+
+  const Eigen::Matrix<double, 6, 6> JJt =
+      J * J.transpose() + kLambda2 * Eigen::Matrix<double, 6, 6>::Identity();
+  const Eigen::Matrix<double, 6, 1> F_est = JJt.ldlt().solve(J * tau_est);
+
+  for (size_t a = 0; a < 6; ++a) {
+    const auto ai = static_cast<Eigen::Index>(a);
+    if (std::abs(F_est[ai]) > cartesian_wrench_limits_[a]) {
+      RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+        kLimitWarnPeriodMs,
+        "Cartesian wrench trip: estimated %s is %.2f (N or Nm), exceeding "
+        "cartesian_wrench_limits of %.2f. This is derived from the joint "
+        "torque estimate via a Jacobian pseudo-inverse, not measured "
+        "directly. Freezing and aborting the active goal.",
+        kWrenchName[a], F_est[ai], cartesian_wrench_limits_[a]);
       return true;
     }
   }

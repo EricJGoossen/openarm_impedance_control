@@ -20,7 +20,8 @@ ControllerParams readControllerParams(rclcpp_lifecycle::LifecycleNode& node) {
 
   p.ee_frame_name = node.get_parameter("ee_frame_name").as_string();
 
-  p.joint_torque_limits = node.get_parameter("joint_torque_limits").as_double_array();
+  p.joint_torque_limits      = node.get_parameter("joint_torque_limits").as_double_array();
+  p.cartesian_wrench_limits  = node.get_parameter("cartesian_wrench_limits").as_double_array();
 
   p.cartesian_position_min = node.get_parameter("cartesian_position_min").as_double_array();
   p.cartesian_position_max = node.get_parameter("cartesian_position_max").as_double_array();

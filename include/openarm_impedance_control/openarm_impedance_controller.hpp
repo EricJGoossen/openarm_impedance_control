@@ -55,6 +55,9 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   std::vector<double> motor_kd_;
   std::atomic<bool> do_gravity_compensation_{true};
 
+  std::vector<double> cartesian_wrench_limits_;   // [fx fy fz mx my mz], N / Nm
+  bool cartesian_wrench_limit_enabled_{false};
+
   // Runtime velocity trip (unrelated to the old impedance law -- a hard
   // safety backstop that stays regardless of control scheme).
   double cartesian_velocity_limit_{0.0};
@@ -93,18 +96,23 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   // map[k] = index of joint_names_[k] within goal_names.
   std::vector<size_t> buildJointMap(const std::vector<std::string>& goal_names) const;
 
-  // Clamps the gravity-comp effort to joint_torque_limits_ (a backstop --
-  // goal validation should already prevent this from firing) and logs which
-  // joints, throttled.
+  // Clamps the gravity-comp effort to joint_torque_limits_
   void clampAndReportEffort(Eigen::VectorXd& tau);
 
   // True if the measured joint velocities or TCP speed exceed their limits.
   bool checkVelocityTrip(const Eigen::VectorXd& dq, const Eigen::Vector3d& tcp_vel);
 
-  bool checkTorqueTrip(const Eigen::VectorXd& q, const Eigen::VectorXd& dq,
-                      const Eigen::VectorXd& tau_gravity_effort);
+  // Estimates each joint's currently-commanded torque
+  Eigen::VectorXd estimateJointTorque(const Eigen::VectorXd& q, const Eigen::VectorXd& dq,
+                                      const Eigen::VectorXd& tau_gravity_effort) const;
 
-  // Shared "stop where you are" response for both trips: zero effort, freeze
+  // True if any joint's estimated torque (see above) exceeds joint_torque_limits_.
+  bool checkTorqueTrip(const Eigen::VectorXd& tau_est);
+
+  bool checkCartesianWrenchTrip(const Eigen::Matrix<double, 6, Eigen::Dynamic>& J,
+                                const Eigen::VectorXd& tau_est);
+
+  // Shared "stop where you are" response for all trips: zero effort, freeze
   // the reference at the current measured state, abort the active goal.
   void freezeAndAbortGoal(const Eigen::VectorXd& q, const char* reason, int32_t error_code);
 

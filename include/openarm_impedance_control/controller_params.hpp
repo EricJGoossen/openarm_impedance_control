@@ -13,6 +13,7 @@ struct ControllerParams {
   std::string ee_frame_name;
 
   std::vector<double> joint_torque_limits;
+  std::vector<double> cartesian_wrench_limits;  
 
   std::vector<double> cartesian_position_min;
   std::vector<double> cartesian_position_max;
