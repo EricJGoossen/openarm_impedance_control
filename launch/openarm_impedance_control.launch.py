@@ -1,4 +1,5 @@
 import os
+import tempfile
 import xacro
 
 from ament_index_python.packages import get_package_share_directory
@@ -49,14 +50,18 @@ def launch_robot_nodes(context: LaunchContext,
     controllers_file_str = context.perform_substitution(controllers_file)
     motor_gains_file_str = context.perform_substitution(motor_gains_file)
 
-    motor_gains_overrides = {
-        "left_impedance_controller": {
-            "ros__parameters": {"motor_gains_file": motor_gains_file_str}
-        },
-        "right_impedance_controller": {
-            "ros__parameters": {"motor_gains_file": motor_gains_file_str}
-        },
-    }
+    motor_gains_override_yaml = (
+        "left_impedance_controller:\n"
+        "  ros__parameters:\n"
+        f"    motor_gains_file: \"{motor_gains_file_str}\"\n"
+        "right_impedance_controller:\n"
+        "  ros__parameters:\n"
+        f"    motor_gains_file: \"{motor_gains_file_str}\"\n"
+    )
+    with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", prefix="motor_gains_override_", delete=False) as f:
+        f.write(motor_gains_override_yaml)
+        motor_gains_override_file = f.name
 
     robot_state_pub = Node(
         package="robot_state_publisher",
@@ -70,7 +75,7 @@ def launch_robot_nodes(context: LaunchContext,
         package="controller_manager",
         executable="ros2_control_node",
         output="both",
-        parameters=[robot_description_param, controllers_file_str, motor_gains_overrides],
+        parameters=[robot_description_param, controllers_file_str, motor_gains_override_file],
     )
 
     return [robot_state_pub, control_node]
