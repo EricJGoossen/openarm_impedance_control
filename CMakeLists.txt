@@ -22,7 +22,6 @@ find_package(realtime_tools REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_library(openarm_impedance_controller SHARED
-  src/cartesian_correction.cpp
   src/robot_model.cpp
   src/goal_limits.cpp
   src/controller_params.cpp

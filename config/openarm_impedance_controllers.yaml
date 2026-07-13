@@ -58,7 +58,7 @@ left_impedance_controller:
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
     # Estimated Cartesian wrench trip [fx fy fz mx my mz] (N, N*m)
-    cartesian_wrench_limits: []
+    cartesian_wrench_limits: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
 
 
 right_impedance_controller:
@@ -85,7 +85,7 @@ right_impedance_controller:
 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
-    cartesian_wrench_limits: []
+    cartesian_wrench_limits: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
 
 
 left_gripper_controller:
