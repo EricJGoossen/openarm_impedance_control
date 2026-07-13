@@ -51,6 +51,8 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   std::optional<GoalLimits> goal_limits_;
 
   std::vector<double> joint_torque_limits_;   // backstop clamp on the RT effort command
+  std::vector<double> motor_kp_;              // onboard motor gains, for the runtime torque trip
+  std::vector<double> motor_kd_;
   std::atomic<bool> do_gravity_compensation_{true};
 
   // Runtime velocity trip (unrelated to the old impedance law -- a hard
@@ -98,6 +100,13 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // True if the measured joint velocities or TCP speed exceed their limits.
   bool checkVelocityTrip(const Eigen::VectorXd& dq, const Eigen::Vector3d& tcp_vel);
+
+  bool checkTorqueTrip(const Eigen::VectorXd& q, const Eigen::VectorXd& dq,
+                      const Eigen::VectorXd& tau_gravity_effort);
+
+  // Shared "stop where you are" response for both trips: zero effort, freeze
+  // the reference at the current measured state, abort the active goal.
+  void freezeAndAbortGoal(const Eigen::VectorXd& q, const char* reason, int32_t error_code);
 
   // Logs a hardware_interface set_value() failure. Throttled.
   void reportInterfaceWriteFailure(const char* what, size_t joint_idx);

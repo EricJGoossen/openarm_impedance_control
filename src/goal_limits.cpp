@@ -14,19 +14,13 @@ GoalLimits::GoalLimits(std::vector<std::string> joint_names,
                        Eigen::VectorXd q_lower, Eigen::VectorXd q_upper,
                        double joint_position_margin,
                        std::vector<double> cartesian_min,
-                       std::vector<double> cartesian_max,
-                       std::vector<double> joint_torque_limits,
-                       std::vector<double> motor_kp,
-                       std::vector<double> motor_kd)
+                       std::vector<double> cartesian_max)
   : joint_names_(std::move(joint_names)),
     q_lower_(std::move(q_lower)),
     q_upper_(std::move(q_upper)),
     joint_position_margin_(joint_position_margin),
     cartesian_min_(std::move(cartesian_min)),
-    cartesian_max_(std::move(cartesian_max)),
-    joint_torque_limits_(std::move(joint_torque_limits)),
-    motor_kp_(std::move(motor_kp)),
-    motor_kd_(std::move(motor_kd))
+    cartesian_max_(std::move(cartesian_max))
 {
   if (!std::isfinite(joint_position_margin_) || joint_position_margin_ < 0.0) {
     throw std::invalid_argument("joint_position_margin must be finite and non-negative");
@@ -62,70 +56,19 @@ GoalLimits::GoalLimits(std::vector<std::string> joint_names,
     }
     cartesian_enabled_ = true;
   }
-
-  const size_t n = joint_names_.size();
-  if (joint_torque_limits_.size() != n || motor_kp_.size() != n || motor_kd_.size() != n) {
-    throw std::invalid_argument(
-        "joint_torque_limits / motor kp / motor kd must each have " +
-        std::to_string(n) + " elements (one per joint)");
-  }
-  for (size_t i = 0; i < n; ++i) {
-    if (!std::isfinite(joint_torque_limits_[i]) || joint_torque_limits_[i] <= 0.0) {
-      throw std::invalid_argument("joint_torque_limits must be finite and positive");
-    }
-    if (!std::isfinite(motor_kp_[i]) || motor_kp_[i] < 0.0 ||
-        !std::isfinite(motor_kd_[i]) || motor_kd_[i] < 0.0) {
-      throw std::invalid_argument("motor kp/kd must be finite and non-negative");
-    }
-  }
-}
-
-bool GoalLimits::checkSegmentTorque(const Eigen::VectorXd& q0, const Eigen::VectorXd& dq0,
-                                    const Eigen::VectorXd& q1, const Eigen::VectorXd& dq1,
-                                    size_t point_index, const RobotModel& model,
-                                    const rclcpp::Logger& logger) const {
-  const Eigen::VectorXd g0 = model.gravityTorqueNonRT(q0);
-  const Eigen::VectorXd g1 = model.gravityTorqueNonRT(q1);
-
-  for (size_t k = 0; k < joint_names_.size(); ++k) {
-    const auto idx = static_cast<Eigen::Index>(k);
-    const double pos_err = std::abs(q1[idx] - q0[idx]);
-    const double vel     = std::max(std::abs(dq0[idx]), std::abs(dq1[idx]));
-    const double tau_pd  = motor_kp_[k] * pos_err + motor_kd_[k] * vel;
-    const double tau_g   = std::max(std::abs(g0[idx]), std::abs(g1[idx]));
-    const double tau_est = tau_pd + tau_g;
-
-    if (tau_est > joint_torque_limits_[k]) {
-      RCLCPP_WARN(logger,
-        "Rejected: waypoint %zu estimated torque on joint '%s' is %.2f Nm "
-        "(onboard PD ~%.2f Nm [kp=%.1f * %.4f rad + kd=%.2f * %.3f rad/s] + "
-        "gravity ~%.2f Nm), exceeding joint_torque_limits of %.2f Nm. Slow "
-        "down or shorten this segment.",
-        point_index, joint_names_[k].c_str(), tau_est, tau_pd,
-        motor_kp_[k], pos_err, motor_kd_[k], vel, tau_g, joint_torque_limits_[k]);
-      return false;
-    }
-  }
-  return true;
 }
 
 bool GoalLimits::validate(const trajectory_msgs::msg::JointTrajectory& traj,
                          const std::vector<size_t>& joint_map,
-                         const Eigen::VectorXd& q_ref_start,
-                         const Eigen::VectorXd& dq_ref_start,
                          const RobotModel& model,
                          const rclcpp::Logger& logger) const {
   const size_t n = joint_names_.size();
-  Eigen::VectorXd q_pt(n), dq_pt(n);
-  Eigen::VectorXd prev_q = q_ref_start;
-  Eigen::VectorXd prev_dq = dq_ref_start;
+  Eigen::VectorXd q_pt(n);
 
   for (size_t p = 0; p < traj.points.size(); ++p) {
     const auto& pt = traj.points[p];
     for (size_t k = 0; k < n; ++k) {
-      const auto idx = static_cast<Eigen::Index>(k);
-      q_pt[idx]  = pt.positions[joint_map[k]];
-      dq_pt[idx] = pt.velocities.empty() ? 0.0 : pt.velocities[joint_map[k]];
+      q_pt[static_cast<Eigen::Index>(k)] = pt.positions[joint_map[k]];
     }
 
     // Joint-space box (URDF limits, shrunk by the margin).
@@ -168,14 +111,6 @@ bool GoalLimits::validate(const trajectory_msgs::msg::JointTrajectory& traj,
         }
       }
     }
-
-    // Predicted onboard-PD + gravity torque for this segment.
-    if (!checkSegmentTorque(prev_q, prev_dq, q_pt, dq_pt, p, model, logger)) {
-      return false;
-    }
-
-    prev_q = q_pt;
-    prev_dq = dq_pt;
   }
   return true;
 }
@@ -223,9 +158,6 @@ void GoalLimits::logSummary(const rclcpp::Logger& logger) const {
       "No cartesian_position_min/max configured -- goals will not be "
       "position-checked in Cartesian space.");
   }
-  RCLCPP_INFO(logger,
-    "Torque-limit check active: onboard motor gains (kp/kd) plus gravity "
-    "comp, checked per segment against joint_torque_limits.");
 }
 
 }  // namespace openarm_impedance_controller

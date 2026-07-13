@@ -56,11 +56,12 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
     return CallbackReturn::ERROR;
   }
 
-  std::vector<double> motor_kp(joint_names_.size()), motor_kd(joint_names_.size());
+  motor_kp_.assign(joint_names_.size(), 0.0);
+  motor_kd_.assign(joint_names_.size(), 0.0);
   try {
     MotorGains gains(params.motor_gains_file);
     for (size_t i = 0; i < joint_names_.size(); ++i) {
-      gains.lookup(joint_names_[i], motor_kp[i], motor_kd[i]);
+      gains.lookup(joint_names_[i], motor_kp_[i], motor_kd_[i]);
     }
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(),
@@ -90,10 +91,7 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
         robot_model_->jointUpperLimits(),
         params.joint_position_margin,
         params.cartesian_position_min,
-        params.cartesian_position_max,
-        joint_torque_limits_,
-        motor_kp,
-        motor_kd);
+        params.cartesian_position_max);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to construct GoalLimits: %s", e.what());
     return CallbackReturn::ERROR;
@@ -102,7 +100,9 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
 
   RCLCPP_INFO(get_node()->get_logger(),
     "OpenArm Impedance Controller: motor onboard PD tracks the interpolated "
-    "trajectory directly.");
+    "trajectory directly; this controller adds gravity-comp feedforward only "
+    "(do_gravity_compensation=%s) and validates goals against joint_torque_limits.",
+    do_gravity_compensation_ ? "true" : "false");
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
       std::bind(&OpenArmImpedanceController::onParameterChange,
@@ -138,7 +138,8 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Seed the reference to the current joint state, so the arm holds in place.
+  // Seed the reference to the current joint state, so the arm holds in place
+  // -- position/velocity commands go straight to the motors' onboard PD.
   q_ref_  = Eigen::VectorXd(n);
   dq_ref_ = Eigen::VectorXd::Zero(n);
   for (size_t i = 0; i < n; ++i) {
@@ -194,7 +195,13 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_deactivate(
     }
   }
 
-  // Command the measured position, zero velocity, zero effort. 
+  // Command the measured position, zero velocity, zero effort. NOTE: because
+  // the motors' onboard PD is now always engaged (that's the point of this
+  // rewrite), this does NOT make the arm go limp the way the old
+  // zero_motor_pd design did -- the motor will still hold this position with
+  // its own kp/kd from control_gains.yaml. A true gravity-only release on
+  // deactivate would have to happen in the hardware interface (a torque-mode
+  // -only command), which is outside this controller's reach.
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     const double pos = state_interfaces_[i * 2].get_value();
     if (!command_interfaces_[i * 3].set_value(pos)) {
@@ -311,28 +318,18 @@ controller_interface::return_type OpenArmImpedanceController::update(
   const Eigen::Vector3d tcp_vel = (J * dq).head<3>();
 
   if (checkVelocityTrip(dq, tcp_vel)) {
-    for (size_t i = 0; i < n; ++i) {
-      if (!command_interfaces_[i * 3 + 2].set_value(0.0)) {
-        reportInterfaceWriteFailure("effort", i);
-      }
-    }
-    q_ref_  = q;
-    dq_ref_ = Eigen::VectorXd::Zero(n);
-    {
-      std::lock_guard<std::mutex> lock(goal_mutex_);
-      if (active_goal_) {
-        auto result = std::make_shared<FollowJointTrajectoryAction::Result>();
-        result->error_code = -2;
-        result->error_string = "Velocity limit exceeded; goal aborted";
-        active_goal_->abort(result);
-        active_goal_.reset();
-      }
-    }
-    trajectory_buffer_.writeFromNonRT(nullptr);
+    freezeAndAbortGoal(q, "Velocity limit exceeded; goal aborted", -2);
+    return controller_interface::return_type::OK;
+  }
+
+  if (checkTorqueTrip(q, dq, tau)) {
+    freezeAndAbortGoal(q, "Torque limit exceeded; goal aborted", -3);
     return controller_interface::return_type::OK;
   }
 
   // Hand the interpolated reference straight to the motors' onboard PD.
+  // Effort is gravity-comp feedforward only -- no active stiffness/damping
+  // term is added here any more.
   for (size_t i = 0; i < n; ++i) {
     if (!command_interfaces_[i * 3].set_value(q_ref_[i])) {
       reportInterfaceWriteFailure("position", i);
@@ -394,6 +391,11 @@ controller_interface::return_type OpenArmImpedanceController::update(
   return controller_interface::return_type::OK;
 }
 
+// Effort backstop. Should essentially never fire if goal validation is
+// doing its job -- gravity comp alone rarely approaches joint_torque_limits
+// -- but it's cheap insurance against a bad URDF mass/inertia or a
+// mis-scaled limit.
+
 void OpenArmImpedanceController::clampAndReportEffort(Eigen::VectorXd& tau) {
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     const auto idx = static_cast<Eigen::Index>(i);
@@ -447,6 +449,54 @@ bool OpenArmImpedanceController::checkVelocityTrip(
     }
   }
   return false;
+}
+
+// Torque trip. 
+bool OpenArmImpedanceController::checkTorqueTrip(
+    const Eigen::VectorXd& q, const Eigen::VectorXd& dq,
+    const Eigen::VectorXd& tau_gravity_effort) {
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const auto idx = static_cast<Eigen::Index>(i);
+    const double pos_err = q_ref_[idx] - q[idx];
+    const double vel_err = dq_ref_[idx] - dq[idx];
+    const double tau_est = motor_kp_[i] * pos_err + motor_kd_[i] * vel_err
+                          + tau_gravity_effort[idx];
+    if (std::abs(tau_est) > joint_torque_limits_[i]) {
+      RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+        kLimitWarnPeriodMs,
+        "Torque trip: joint '%s' estimated onboard-PD + gravity torque is "
+        "%.2f Nm (kp=%.1f * %.4f rad err + kd=%.2f * %.3f rad/s err + "
+        "gravity %.2f Nm), exceeding joint_torque_limits of %.2f Nm. "
+        "Freezing and aborting the active goal.",
+        joint_names_[i].c_str(), tau_est, motor_kp_[i], pos_err,
+        motor_kd_[i], vel_err, tau_gravity_effort[idx], joint_torque_limits_[i]);
+      return true;
+    }
+  }
+  return false;
+}
+
+void OpenArmImpedanceController::freezeAndAbortGoal(
+    const Eigen::VectorXd& q, const char* reason, int32_t error_code) {
+  const size_t n = joint_names_.size();
+  for (size_t i = 0; i < n; ++i) {
+    if (!command_interfaces_[i * 3 + 2].set_value(0.0)) {
+      reportInterfaceWriteFailure("effort", i);
+    }
+  }
+  q_ref_  = q;
+  dq_ref_ = Eigen::VectorXd::Zero(n);
+  {
+    std::lock_guard<std::mutex> lock(goal_mutex_);
+    if (active_goal_) {
+      auto result = std::make_shared<FollowJointTrajectoryAction::Result>();
+      result->error_code = error_code;
+      result->error_string = reason;
+      active_goal_->abort(result);
+      active_goal_.reset();
+    }
+  }
+  trajectory_buffer_.writeFromNonRT(nullptr);
 }
 
 void OpenArmImpedanceController::reportInterfaceWriteFailure(
@@ -558,9 +608,10 @@ rclcpp_action::GoalResponse OpenArmImpedanceController::onGoalRequest(
     }
   }
 
-  // Position limits (joint-space and Cartesian) plus predicted torque.
+  // Position limits (joint-space and Cartesian). Torque is checked live at
+  // runtime instead -- see checkTorqueTrip.
   if (!goal_limits_->validate(goal->trajectory, buildJointMap(goal_names),
-                              q_ref_, dq_ref_, *robot_model_, get_node()->get_logger())) {
+                              *robot_model_, get_node()->get_logger())) {
     return rclcpp_action::GoalResponse::REJECT;
   }
 
