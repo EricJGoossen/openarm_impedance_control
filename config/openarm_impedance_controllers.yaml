@@ -1,14 +1,14 @@
 controller_manager:
   ros__parameters:
-    update_rate: 750
+    update_rate: 500
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    left_impedance_controller:
+    left_controller:
       type: openarm_impedance_controller/OpenArmImpedanceController
 
-    right_impedance_controller:
+    right_controller:
       type: openarm_impedance_controller/OpenArmImpedanceController
 
     left_gripper_controller:
@@ -17,7 +17,7 @@ controller_manager:
     right_gripper_controller:
       type: position_controllers/GripperActionController
 
-left_impedance_controller:
+left_controller:
   ros__parameters:
     joints:
       - openarm_left_joint1
@@ -61,7 +61,7 @@ left_impedance_controller:
     cartesian_wrench_limits: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
 
 
-right_impedance_controller:
+right_controller:
   ros__parameters:
     joints:
       - openarm_right_joint1

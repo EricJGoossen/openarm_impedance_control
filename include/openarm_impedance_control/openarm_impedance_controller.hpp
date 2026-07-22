@@ -44,6 +44,13 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
   using FollowJointTrajectoryAction = control_msgs::action::FollowJointTrajectory;
   using GoalHandle = rclcpp_action::ServerGoalHandle<FollowJointTrajectoryAction>;
   using JointTrajectory = trajectory_msgs::msg::JointTrajectory;
+  using JointTrajectoryPoint = trajectory_msgs::msg::JointTrajectoryPoint;
+
+  // Joint command with a timestamp
+  struct StampedJointCommand {
+    JointTrajectoryPoint point;
+    rclcpp::Time stamp;
+  };
 
   // Configuration
   std::vector<std::string> joint_names_;
@@ -65,16 +72,20 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Trajectory tracking
   realtime_tools::RealtimeBuffer<std::shared_ptr<JointTrajectory>> trajectory_buffer_;
+  rclcpp_action::Server<FollowJointTrajectoryAction>::SharedPtr action_server_;
   rclcpp::Time trajectory_start_time_;
+
+  // Live point streaming
+  realtime_tools::RealtimeBuffer<std::shared_ptr<StampedJointCommand>> stream_buffer_;
+  rclcpp::Subscription<JointTrajectoryPoint>::SharedPtr joint_commands_sub_;
+  static constexpr double kStreamingStaleTimeoutSec = 0.1;
 
   // Current reference: the position/velocity setpoint handed straight to the
   // motors' onboard PD (position + velocity command interfaces).
   Eigen::VectorXd q_ref_;
   Eigen::VectorXd dq_ref_;
-
-  // Action server
-  rclcpp_action::Server<FollowJointTrajectoryAction>::SharedPtr action_server_;
-
+  
+  // Current goal
   mutable std::mutex goal_mutex_;
   std::shared_ptr<GoalHandle> active_goal_;  // guarded by goal_mutex_
 
@@ -91,6 +102,10 @@ class OpenArmImpedanceController : public controller_interface::ControllerInterf
 
   // Helpers
   void interpolateTrajectory(const JointTrajectory& traj, const rclcpp::Time& time);
+
+  void onJointCommand(const JointTrajectoryPoint::SharedPtr msg);
+  void applyStreamingPoint(const JointTrajectoryPoint& point);
+
   void updateFeedback(const Eigen::VectorXd& q, const Eigen::VectorXd& dq);
 
   // map[k] = index of joint_names_[k] within goal_names.

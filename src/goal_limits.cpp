@@ -70,49 +70,16 @@ bool GoalLimits::validate(const trajectory_msgs::msg::JointTrajectory& traj,
     for (size_t k = 0; k < n; ++k) {
       q_pt[static_cast<Eigen::Index>(k)] = pt.positions[joint_map[k]];
     }
-
-    // Joint-space box (URDF limits, shrunk by the margin).
-    for (size_t k = 0; k < n; ++k) {
-      const auto idx = static_cast<Eigen::Index>(k);
-      if (!std::isfinite(q_lower_[idx]) || !std::isfinite(q_upper_[idx])) {
-        continue;
-      }
-      const double lo = q_lower_[idx] + joint_position_margin_;
-      const double hi = q_upper_[idx] - joint_position_margin_;
-      if (!std::isfinite(q_pt[idx]) || q_pt[idx] < lo || q_pt[idx] > hi) {
-        RCLCPP_WARN(logger,
-          "Rejected: waypoint %zu puts joint '%s' at %.4f rad, outside the "
-          "admissible range [%.4f, %.4f] (URDF limit [%.4f, %.4f], margin %.3f).",
-          p, joint_names_[k].c_str(), q_pt[idx], lo, hi,
-          q_lower_[idx], q_upper_[idx], joint_position_margin_);
-        return false;
-      }
-    }
-
-    // Cartesian workspace box on the TCP.
-    if (cartesian_enabled_) {
-      Eigen::Vector3d tcp;
-      try {
-        tcp = model.tcpPositionNonRT(q_pt);
-      } catch (const std::exception& e) {
-        RCLCPP_WARN(logger, "Rejected: forward kinematics failed on waypoint %zu: %s",
-                    p, e.what());
-        return false;
-      }
-      for (size_t a = 0; a < 3; ++a) {
-        const auto ai = static_cast<Eigen::Index>(a);
-        if (tcp[ai] < cartesian_min_[a] || tcp[ai] > cartesian_max_[a]) {
-          RCLCPP_WARN(logger,
-            "Rejected: waypoint %zu puts the TCP at %s = %.4f m, outside the "
-            "workspace box [%.4f, %.4f]. (TCP would be at [%.4f, %.4f, %.4f].)",
-            p, kAxisName[a], tcp[ai], cartesian_min_[a], cartesian_max_[a],
-            tcp[0], tcp[1], tcp[2]);
-          return false;
-        }
-      }
+    if (!checkPoint(q_pt, model, logger, "waypoint " + std::to_string(p))) {
+      return false;
     }
   }
   return true;
+}
+
+bool GoalLimits::validatePoint(const Eigen::VectorXd& q, const RobotModel& model,
+                               const rclcpp::Logger& logger) const {
+  return checkPoint(q, model, logger, "streaming point");
 }
 
 void GoalLimits::reportViolations(const Eigen::VectorXd& q, const Eigen::Vector3d& tcp,
@@ -159,5 +126,52 @@ void GoalLimits::logSummary(const rclcpp::Logger& logger) const {
       "position-checked in Cartesian space.");
   }
 }
+
+bool GoalLimits::checkPoint(const Eigen::VectorXd& q_pt, const RobotModel& model,
+                            const rclcpp::Logger& logger, const std::string& label) const {
+  const size_t n = joint_names_.size();
+  
+  for (size_t k = 0; k < n; ++k) {
+    const auto idx = static_cast<Eigen::Index>(k);
+    if (!std::isfinite(q_lower_[idx] || !std::isfinite(q_upper_[idx]))) {
+      continue;
+    }
+    const double lo = q_lower_[idx] + joint_position_margin_;
+    const double hi = q_upper_[idx] - joint_position_margin_;
+
+    if (!std::isfinite(q_pt[idx]) || q_pt[idx] < lo || q_pt[idx] > hi) {
+      RCLCPP_WARN(logger,
+        "Rejected: %s puts joint '%s' at %.4f rad, outside the "
+        "admissible range [%.4f, %.4f] (URDF limit [%.4f, %.4f], margin %.3f).",
+        label.c_str(), joint_names_[k].c_str(), q_pt[idx], lo, hi,
+        q_lower_[idx], q_upper_[idx], joint_position_margin_);
+      return false;
+    }
+  }
+
+  if (cartesian_enabled_) {
+    Eigen::Vector3d tcp;
+    try {
+      tcp = model.tcpPositionNonRT(q_pt);
+    } catch (const std::exception& e) {
+      RCLCPP_WARN(logger, "Rejected: forward kinematics failed on %s: %s",
+                  label.c_str(), e.what());
+      return false;
+    }
+    for (size_t a = 0; a < 3; ++a) {
+      const auto ai = static_cast<Eigen::Index>(a);
+      if (tcp[ai] < cartesian_min_[a] || tcp[ai] > cartesian_max_[a]) {
+        RCLCPP_WARN(logger,
+          "Rejected: %s puts the TCP at %s = %.4f m, outside the "
+          "workspace box [%.4f, %.4f]. (TCP would be at [%.4f, %.4f, %.4f].)",
+          label.c_str(), kAxisName[a], tcp[ai], cartesian_min_[a], cartesian_max_[a],
+          tcp[0], tcp[1], tcp[2]);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 
 }  // namespace openarm_impedance_controller

@@ -34,7 +34,13 @@ class GoalLimits {
 
   bool cartesianEnabled() const { return cartesian_enabled_; }
 
+  bool validatePoint(const Eigen::VectorXd& q, const RobotModel& model,
+                     const rclcpp::Logger& logger) const;
+
  private:
+  bool checkPoint(const Eigen::VectorXd& q_pt, const RobotModel& model,
+                  const rclcpp::Logger& logger, const std::string& label) const;
+
   std::vector<std::string> joint_names_;
   Eigen::VectorXd q_lower_;
   Eigen::VectorXd q_upper_;

@@ -51,10 +51,10 @@ def launch_robot_nodes(context: LaunchContext,
     motor_gains_file_str = context.perform_substitution(motor_gains_file)
 
     motor_gains_override_yaml = (
-        "left_impedance_controller:\n"
+        "left_controller:\n"
         "  ros__parameters:\n"
         f"    motor_gains_file: \"{motor_gains_file_str}\"\n"
-        "right_impedance_controller:\n"
+        "right_controller:\n"
         "  ros__parameters:\n"
         f"    motor_gains_file: \"{motor_gains_file_str}\"\n"
     )
@@ -128,42 +128,42 @@ def generate_launch_description():
         args=[right_can_interface, left_can_interface, controllers_file, motor_gains_file],
     )
 
-    rosbag_recorder = Node(
-        package="rosbag_recorder",
-        executable="recorder_node",
-        name="rosbag_recorder",
-        output="screen",
-        parameters=[{
-            "output_dir": os.path.expanduser("~/rosbags"),
-            "storage_id": "mcap",
-        }],
-    )
+    # rosbag_recorder = Node(
+    #     package="rosbag_recorder",
+    #     executable="recorder_node",
+    #     name="rosbag_recorder",
+    #     output="screen",
+    #     parameters=[{
+    #         "output_dir": os.path.expanduser("~/rosbags"),
+    #         "storage_id": "mcap",
+    #     }],
+    # )
 
-    start_recording = TimerAction(
-        period=LAUNCH_DELAY_SECONDS,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    "ros2", "service", "call",
-                    "/rosbag_recorder/start",
-                    "std_srvs/srv/Trigger", "{}",
-                ],
-                output="screen",
-            ),
-        ],
-    )
+    # start_recording = TimerAction(
+    #     period=LAUNCH_DELAY_SECONDS,
+    #     actions=[
+    #         ExecuteProcess(
+    #             cmd=[
+    #                 "ros2", "service", "call",
+    #                 "/rosbag_recorder/start",
+    #                 "std_srvs/srv/Trigger", "{}",
+    #             ],
+    #             output="screen",
+    #         ),
+    #     ],
+    # )
 
     return LaunchDescription(declared_arguments + [
         robot_nodes,
-        rosbag_recorder,
-        start_recording,
+        # rosbag_recorder,
+        # start_recording,
 
         TimerAction(period=LAUNCH_DELAY_SECONDS, actions=[
             spawner(["joint_state_broadcaster"]),
         ]),
 
         TimerAction(period=LAUNCH_DELAY_SECONDS, actions=[
-            spawner(["left_impedance_controller", "right_impedance_controller"]),
+            spawner(["left_controller", "right_controller"]),
         ]),
 
         TimerAction(period=LAUNCH_DELAY_SECONDS, actions=[

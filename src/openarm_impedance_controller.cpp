@@ -136,7 +136,8 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_init() {
 
 controller_interface::CallbackReturn OpenArmImpedanceController::on_configure(
     const rclcpp_lifecycle::State& /* state */) {
-  const std::string action_name =
+  // Setup trajectory control
+  std::string action_name =
       std::string("/") + get_node()->get_name() + "/follow_joint_trajectory";
 
   action_server_ = rclcpp_action::create_server<FollowJointTrajectoryAction>(
@@ -148,6 +149,14 @@ controller_interface::CallbackReturn OpenArmImpedanceController::on_configure(
                 this, std::placeholders::_1),
       std::bind(&OpenArmImpedanceController::onGoalAccepted,
                 this, std::placeholders::_1));
+
+  // Setup position streaming
+  std::string subscription_name = 
+      std::string("/") + get_node()->get_name() + "/joint_commands";
+
+  joint_commands_sub_ = get_node()->create_subscription<JointTrajectoryPoint>(
+      subscription_name, rclcpp::QoS(1),
+      std::bind(&OpenArmImpedanceController::onJointCommand, this, std::placeholders::_1));
 
   return CallbackReturn::SUCCESS;
 }
@@ -300,6 +309,15 @@ controller_interface::return_type OpenArmImpedanceController::update(
   const bool trajectory_active = (trajectory_ptr && *trajectory_ptr);
   if (trajectory_active) {
     interpolateTrajectory(**trajectory_ptr, time);
+  } else {
+    auto stream_ptr = stream_buffer_.readFromRT();
+    if (stream_ptr && *stream_ptr) {
+      const auto& cmd = **stream_ptr;
+      const double age_sec = (time - cmd.stamp).seconds();
+      if (age_sec < kStreamingStaleTimeoutSec) {
+        applyStreamingPoint(cmd.point);
+      }
+    }
   }
 
   Eigen::VectorXd tau = do_gravity_compensation_
@@ -582,7 +600,7 @@ void OpenArmImpedanceController::interpolateTrajectory(
 
   if (rclcpp::Duration(points.back().time_from_start) <= elapsed) {
     q_ref_  = to_eigen(points.back().positions);
-    dq_ref_ = Eigen::VectorXd::Zero(n);
+    dq_ref_ = to_eigen(points.back().velocities);
   } else if (seg + 1 < points.size()) {
     const auto& p0 = points[seg];
     const auto& p1 = points[seg + 1];
@@ -621,6 +639,56 @@ std::vector<size_t> OpenArmImpedanceController::buildJointMap(
     map[k] = static_cast<size_t>(std::distance(goal_names.begin(), it));
   }
   return map;
+}
+
+// Stream helpers
+void OpenArmImpedanceController::onJointCommand(
+    const JointTrajectoryPoint::SharedPtr msg) {
+  const size_t n = joint_names_.size();
+
+  if (msg->positions.size() != n) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+      kLimitWarnPeriodMs,
+      "String joint_commands positions size %zu != %zu joints. Rejecting...",
+      msg->positions.size(), n);
+    return;
+  }
+  
+  Eigen::VectorXd q(n);
+  for (size_t i = 0; i < n; ++i) {
+    q[static_cast<Eigen::Index>(i)] = msg->positions[i];
+  }
+  if (!q.allFinite()) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(),
+      kLimitWarnPeriodMs, "Non-finite streaming joint_commands point. Rejecting...");
+    return;
+  }
+
+  if (!goal_limits_->validatePoint(q, *robot_model_, get_node()->get_logger())) {
+    return;
+  }
+
+  stream_buffer_.writeFromNonRT(
+      std::make_shared<StampedJointCommand>(
+        StampedJointCommand{*msg, get_node()->now()}));
+}
+
+void OpenArmImpedanceController::applyStreamingPoint(const JointTrajectoryPoint& point) {
+  const size_t n = joint_names_.size();
+
+  Eigen::VectorXd q(n), dq(n);
+  for (size_t i = 0; i < n; ++i) {
+    q[i] = point.positions[i];
+  }
+  dq.setZero();
+  if (point.velocities.size() == n) {
+    for (size_t i = 0; i < n; ++i) {
+      dq[i] = point.velocities[i];
+    }
+  }
+
+  q_ref_ = q;
+  dq_ref_ = dq;
 }
 
 // Action Server Callbacks
@@ -703,7 +771,7 @@ void OpenArmImpedanceController::onGoalAccepted(std::shared_ptr<GoalHandle> goal
   }
 
   // Prepend the current reference as the start point at t=0.
-  trajectory_msgs::msg::JointTrajectoryPoint start_pt;
+  JointTrajectoryPoint start_pt;
   start_pt.positions.assign(q_ref_.data(), q_ref_.data() + n);
   start_pt.velocities.assign(n, 0.0);
   start_pt.time_from_start = rclcpp::Duration::from_seconds(0.0);
