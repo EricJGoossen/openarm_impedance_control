@@ -396,6 +396,18 @@ controller_interface::return_type OpenArmImpedanceController::update(
   }
 
   if (goal->is_canceling()) {
+    // Freeze the reference at wherever the arm actually is right now, with
+    // zero commanded velocity -- without this, q_ref_/dq_ref_ are left at
+    // whatever interpolateTrajectory() last computed (generally a nonzero
+    // velocity, since a cancel typically lands mid-motion), and nothing
+    // ever updates them again once trajectory_active goes false. The motor's
+    // onboard PD (kp*pos_err + kd*(dq_ref_-dq_actual)) would then keep
+    // chasing that stale nonzero velocity indefinitely -- a "cancelled"
+    // goal must mean "hold still here", not "keep coasting at your last
+    // commanded rate forever".
+    q_ref_ = q;
+    dq_ref_.setZero();
+
     auto result = std::make_shared<FollowJointTrajectoryAction::Result>();
     result->error_code = FollowJointTrajectoryAction::Result::SUCCESSFUL;
     goal->canceled(result);

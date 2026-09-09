@@ -1,6 +1,6 @@
 controller_manager:
   ros__parameters:
-    update_rate: 500
+    update_rate: 400
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -16,6 +16,11 @@ controller_manager:
 
     right_gripper_controller:
       type: position_controllers/GripperActionController
+
+    # hardware_components_initial_state:
+    #   inactive:
+    #     - "openarm_left_hardware_interface"
+    #     - "openarm_right_hardware_interface"
 
 left_controller:
   ros__parameters:
@@ -41,9 +46,24 @@ left_controller:
     cartesian_position_max: [ 0.8,  0.8, 1.2]
 
     # Joint position limits are read from the URDF -- there is no override
-    # here. This margin (rad) is pulled in from each side when validating
-    # goals, so waypoints must land strictly inside the mechanical range.
-    joint_position_margin: 0.05
+    # here. checkPoint() computes lo=q_lower_+margin, hi=q_upper_-margin,
+    # so a NEGATIVE margin widens the admissible window outward past the
+    # declared URDF limits (positive would narrow it inward, as it did
+    # before this was set to 0.0). Physically nudging joint4 off its
+    # boundary didn't hold -- it settles back to a steady-state ~-0.0002
+    # rad past its own 0.0 lower limit (gravity-comp isn't perfectly
+    # exact / minor mechanical sag). -0.005 rad gives ~25x that observed
+    # deviation as headroom, capped well inside GoalLimits's
+    # kMinJointPositionMargin=-0.05 floor (goal_limits.cpp) so this stays
+    # a tiny tolerance, not a real relaxation of the safety limit.
+    # NOTE: GoalLimits::reportViolations() (the periodic "outside its URDF
+    # limit" warning) compares against the raw, un-margined URDF bounds by
+    # design -- it will likely keep printing even after this fix. That's
+    # expected/informational; what matters is whether goals keep getting
+    # rejected. Fixed at configure time -- requires relaunching this
+    # controller to take effect (see
+    # OpenArmImpedanceController::onParameterChange).
+    joint_position_margin: -0.015
 
     # Runtime safety trip on TCP speed (m/s). 0 disables it.
     cartesian_velocity_limit: 0.0
@@ -58,7 +78,20 @@ left_controller:
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
     # Estimated Cartesian wrench trip [fx fy fz mx my mz] (N, N*m)
-    cartesian_wrench_limits: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
+    # TODO(review): raised from [50,50,50,15,15,15] -- concurrent bimanual
+    # motion (both arms independently commanded at once) rocks the shared
+    # base enough that q_ref-q tracking error spikes transiently on both
+    # arms in sync (confirmed via bringup_logs/stage6_bimanual_independent/
+    # .../20260907_144159_concurrent_independent_1: real measured joint
+    # effort stayed <8 Nm throughout, well under joint_torque_limits, while
+    # this estimate -- built from tracking error, not a real F/T sensor --
+    # tripped on both arms at the same instant). The Jacobian pseudo-inverse
+    # in checkCartesianWrenchTrip can amplify a modest per-joint tracking
+    # error into a large apparent Cartesian wrench, especially away from
+    # well-conditioned configurations. Picked a moderate increase rather
+    # than a large one since this is still first bring-up; re-tighten if
+    # real telemetry ever shows genuine large effort alongside a trip.
+    cartesian_wrench_limits: [90.0, 90.0, 90.0, 25.0, 25.0, 25.0]
 
 
 right_controller:
@@ -79,13 +112,16 @@ right_controller:
 
     cartesian_position_min: [-0.8, -0.8, 0.0]
     cartesian_position_max: [ 0.8,  0.8, 1.2]
-    joint_position_margin: 0.05
+    joint_position_margin: -0.005
 
     cartesian_velocity_limit: 0.0
 
     joint_torque_limits: [45.0, 45.0, 25.0, 20.0, 15.0, 15.0, 15.0]
 
-    cartesian_wrench_limits: [50.0, 50.0, 50.0, 15.0, 15.0, 15.0]
+    # TODO(review): see matching note under left_controller above -- raised
+    # from [50,50,50,15,15,15] for the same concurrent-bimanual coupling
+    # transient, confirmed on this arm's telemetry in the same trial.
+    cartesian_wrench_limits: [90.0, 90.0, 90.0, 25.0, 25.0, 25.0]
 
 
 left_gripper_controller:

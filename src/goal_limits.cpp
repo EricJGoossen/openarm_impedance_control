@@ -8,6 +8,13 @@ namespace openarm_impedance_controller {
 
 namespace {
 constexpr const char* kAxisName[3] = {"x", "y", "z"};
+// checkPoint() computes lo=q_lower_+margin, hi=q_upper_-margin, so a
+// negative margin WIDENS the admissible window outward past the declared
+// URDF limits instead of narrowing it inward. Allowed, but capped close to
+// zero -- this is meant to absorb a joint's real resting position sitting
+// a hair past its own declared limit (gravity-comp/mechanical sag), not to
+// meaningfully relax real safety limits.
+constexpr double kMinJointPositionMargin = -0.05;
 }  // namespace
 
 GoalLimits::GoalLimits(std::vector<std::string> joint_names,
@@ -22,8 +29,10 @@ GoalLimits::GoalLimits(std::vector<std::string> joint_names,
     cartesian_min_(std::move(cartesian_min)),
     cartesian_max_(std::move(cartesian_max))
 {
-  if (!std::isfinite(joint_position_margin_) || joint_position_margin_ < 0.0) {
-    throw std::invalid_argument("joint_position_margin must be finite and non-negative");
+  if (!std::isfinite(joint_position_margin_) || joint_position_margin_ < kMinJointPositionMargin) {
+    throw std::invalid_argument(
+        "joint_position_margin must be finite and >= " +
+        std::to_string(kMinJointPositionMargin) + " rad");
   }
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     const auto idx = static_cast<Eigen::Index>(i);
@@ -90,11 +99,19 @@ void GoalLimits::reportViolations(const Eigen::VectorXd& q, const Eigen::Vector3
     if (!std::isfinite(q_lower_[idx]) || !std::isfinite(q_upper_[idx])) {
       continue;
     }
-    if (q[idx] < q_lower_[idx] || q[idx] > q_upper_[idx]) {
+    // Same admissible window checkPoint() actually enforces at
+    // goal-acceptance time -- was comparing against the raw, un-margined
+    // URDF bounds here, which meant this warning could fire even when the
+    // joint was well within what the controller would actually accept.
+    const double lo = q_lower_[idx] + joint_position_margin_;
+    const double hi = q_upper_[idx] - joint_position_margin_;
+    if (q[idx] < lo || q[idx] > hi) {
       RCLCPP_WARN_THROTTLE(logger, clock, throttle_ms,
-        "Joint '%s' outside its URDF limit: %.4f not in [%.4f, %.4f]. Not "
-        "corrected here -- the limit is enforced at goal-acceptance time.",
-        joint_names_[i].c_str(), q[idx], q_lower_[idx], q_upper_[idx]);
+        "Joint '%s' outside its admissible range: %.4f not in [%.4f, %.4f] "
+        "(URDF limit [%.4f, %.4f], margin %.3f). Not corrected here -- the "
+        "limit is enforced at goal-acceptance time.",
+        joint_names_[i].c_str(), q[idx], lo, hi,
+        q_lower_[idx], q_upper_[idx], joint_position_margin_);
     }
   }
 
