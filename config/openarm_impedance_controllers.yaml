@@ -17,11 +17,6 @@ controller_manager:
     right_gripper_controller:
       type: position_controllers/GripperActionController
 
-    # hardware_components_initial_state:
-    #   inactive:
-    #     - "openarm_left_hardware_interface"
-    #     - "openarm_right_hardware_interface"
-
 left_controller:
   ros__parameters:
     joints:
@@ -56,12 +51,11 @@ left_controller:
     # deviation as headroom, capped well inside GoalLimits's
     # kMinJointPositionMargin=-0.05 floor (goal_limits.cpp) so this stays
     # a tiny tolerance, not a real relaxation of the safety limit.
-    # NOTE: GoalLimits::reportViolations() (the periodic "outside its URDF
-    # limit" warning) compares against the raw, un-margined URDF bounds by
-    # design -- it will likely keep printing even after this fix. That's
-    # expected/informational; what matters is whether goals keep getting
-    # rejected. Fixed at configure time -- requires relaunching this
-    # controller to take effect (see
+    # NOTE: GoalLimits::reportViolations() (the periodic "outside its
+    # admissible range" warning) checks against this same margined window,
+    # not the raw URDF bounds, so it stays consistent with what
+    # checkPoint() actually accepts. Fixed at configure time -- requires
+    # relaunching this controller to take effect (see
     # OpenArmImpedanceController::onParameterChange).
     joint_position_margin: -0.015
 
