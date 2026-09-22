@@ -2,6 +2,11 @@ controller_manager:
   ros__parameters:
     update_rate: 400
 
+    hardware_components_initial_state:
+      inactive:
+        - openarm_left_hardware_interface
+        - openarm_right_hardware_interface
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
